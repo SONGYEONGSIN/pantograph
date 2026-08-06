@@ -19,7 +19,8 @@ type part struct {
 	file    *zip.File
 	header  zip.FileHeader
 	raw     []byte // 압축된 원본 바이트
-	content []byte // 압축 해제 캐시. nil 이면 아직 안 풀었다
+	content []byte // 압축 해제 캐시. content 자체는 nil 이 유효한 값일 수 있어 loaded 로 적재 여부를 따로 추적한다
+	loaded  bool
 	dirty   bool
 }
 
@@ -84,7 +85,7 @@ func (p *Package) Part(name string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("파트 없음: %s", name)
 	}
-	if pt.content != nil {
+	if pt.loaded {
 		return pt.content, nil
 	}
 	rc, err := pt.file.Open()
@@ -97,6 +98,7 @@ func (p *Package) Part(name string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: 읽기 실패: %w", name, err)
 	}
 	pt.content = c
+	pt.loaded = true
 	return c, nil
 }
 
@@ -107,6 +109,7 @@ func (p *Package) Replace(name string, content []byte) error {
 		return fmt.Errorf("파트 없음: %s", name)
 	}
 	pt.content = content
+	pt.loaded = true
 	pt.dirty = true
 	return nil
 }
