@@ -7,6 +7,7 @@ import (
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/testutil"
 	"github.com/SONGYEONGSIN/pantograph/internal/tmpl"
+	"github.com/SONGYEONGSIN/pantograph/internal/wml"
 )
 
 func pkgs(t *testing.T, forms ...[]string) ([]*opc.Package, []string) {
@@ -179,4 +180,148 @@ func TestExtractRequiresTwoDocuments(t *testing.T) {
 	if len(errs) != 1 || errs[0].Reason != "too_few_documents" {
 		t.Fatalf("문서 1벌인데 거절되지 않았다: %+v", errs)
 	}
+}
+
+// I4a — 베이스 문서에 대한 바이트 수준 가역성
+func TestTemplateReversalBase(t *testing.T) {
+	forms := [][]string{
+		{"청구서", "홍길동", "1,200,000"},
+		{"청구서", "김철수", "880,000"},
+	}
+	ps, names := pkgs(t, forms...)
+
+	tp, sch, errs, err := tmpl.Extract(ps, names)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+
+	vals, err := tmpl.Values(ps[0], sch)
+	if err != nil {
+		t.Fatalf("Values: %v", err)
+	}
+
+	filled, err := opc.OpenBytes(mustBytes(t, tp))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	fillErrs, err := tmpl.Fill(filled, sch, vals)
+	if err != nil || len(fillErrs) != 0 {
+		t.Fatalf("Fill: err=%v errs=%+v", err, fillErrs)
+	}
+
+	want, err := ps[0].Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	got, err := filled.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Equal(want, got) {
+		t.Fatalf("I4a 위반 — 베이스로 되채웠는데 원본과 다르다\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	}
+}
+
+// I4b — 나머지 문서에 대한 텍스트 수준 일치
+func TestTemplateReversalOthersTextLevel(t *testing.T) {
+	ps, names := pkgs(t,
+		[]string{"청구서", "홍길동", "1,200,000"},
+		[]string{"청구서", "김철수", "880,000"},
+	)
+
+	tp, sch, errs, err := tmpl.Extract(ps, names)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+
+	vals, err := tmpl.Values(ps[1], sch)
+	if err != nil {
+		t.Fatalf("Values: %v", err)
+	}
+	filled, err := opc.OpenBytes(mustBytes(t, tp))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	if fe, err := tmpl.Fill(filled, sch, vals); err != nil || len(fe) != 0 {
+		t.Fatalf("Fill: err=%v errs=%+v", err, fe)
+	}
+
+	wantTexts := textsOf(t, ps[1])
+	gotTexts := textsOf(t, filled)
+	if len(wantTexts) != len(gotTexts) {
+		t.Fatalf("텍스트 노드 수 %d vs %d", len(gotTexts), len(wantTexts))
+	}
+	for i := range wantTexts {
+		if wantTexts[i] != gotTexts[i] {
+			t.Fatalf("I4b 위반 — 텍스트 %d: %q, 기대 %q", i, gotTexts[i], wantTexts[i])
+		}
+	}
+}
+
+func TestFillRejectsMissingKey(t *testing.T) {
+	ps, names := pkgs(t, []string{"고정", "A"}, []string{"고정", "B"})
+	tp, sch, errs, err := tmpl.Extract(ps, names)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+	fe, err := tmpl.Fill(tp, sch, map[string]string{})
+	if err != nil {
+		t.Fatalf("Fill: %v", err)
+	}
+	if len(fe) != 1 || fe[0].Reason != "missing_key" {
+		t.Fatalf("빠진 키가 거절되지 않았다: %+v", fe)
+	}
+}
+
+func TestFillRejectsTemplateDrift(t *testing.T) {
+	ps, names := pkgs(t, []string{"고정", "A"}, []string{"고정", "B"})
+	tp, sch, errs, err := tmpl.Extract(ps, names)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+	// 템플릿에서 자리표시자를 지운다
+	c, err := tp.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	c = bytes.ReplaceAll(c, []byte("{{k1}}"), []byte("엉뚱한 값"))
+	if err := tp.Replace("word/document.xml", c); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+
+	fe, err := tmpl.Fill(tp, sch, map[string]string{"k1": "X"})
+	if err != nil {
+		t.Fatalf("Fill: %v", err)
+	}
+	if len(fe) != 1 || fe[0].Reason != "template_drift" {
+		t.Fatalf("템플릿 드리프트가 거절되지 않았다: %+v", fe)
+	}
+}
+
+func mustBytes(t *testing.T, p *opc.Package) []byte {
+	t.Helper()
+	b, err := p.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+	return b
+}
+
+func textsOf(t *testing.T, p *opc.Package) []string {
+	t.Helper()
+	c, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	tr, err := wml.Scan(c)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	var out []string
+	for _, n := range tr.Nodes {
+		if n.Type == "t" {
+			out = append(out, n.Text)
+		}
+	}
+	return out
 }

@@ -79,6 +79,8 @@ func main() {
 		os.Exit(cmdDump(os.Args[2:]))
 	case "apply":
 		os.Exit(cmdApply(os.Args[2:]))
+	case "tmpl":
+		os.Exit(cmdTmpl(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(exitInput)
