@@ -7,10 +7,22 @@
 
 ## 지금 상태
 
-**설계 단계.** 구현 코드는 아직 없다.
+**docx 수직 슬라이스 구현 완료.** 덤프 · 패치 · 템플릿 역추출까지.
 
 - [설계 문서](docs/2026-08-06-pantograph-design.md) — 이름·시각 재현 전략·조작 표면 계약·렌더링 엔진·진화 루프
 - [설계 브리프](docs/2026-08-06-design-brief.md) — 전제와 확인이 필요한 가정
+- [docx 왕복 무손실 설계](docs/superpowers/specs/2026-08-06-docx-roundtrip-design.md) — 첫 슬라이스의 확정 설계
+
+### 쓰는 법
+
+```
+panto dump  <in.docx>                                     → stdout 덤프 JSON
+panto apply <in.docx> -p patch.json -o out.docx
+panto tmpl extract <a.docx> <b.docx> [...] -o tmpl.docx --schema schema.json
+panto tmpl fill    <tmpl.docx> --schema schema.json -d data.json -o out.docx
+```
+
+빌드: `go build -o panto ./cmd/panto` (Go 1.26+, 외부 의존 없음)
 
 ## 핵심 주장
 
@@ -31,9 +43,10 @@ Pantograph는 차이를 **경로 단위로** 측정한다. 전체 페이지 픽�
 
 ## 다음 작업
 
-1. **벤치마크 문서 세트 구축** — 합격 임계를 여기서 도출한다. 세트 없이는 진화 루프가 무엇을 향해 학습하는지가 없다
-2. **docx 수직 슬라이스** — 덤프 → 패치 → 렌더 → 비교 → 루프를 한 포맷에서 끝까지. 포맷 확장은 그 뒤
+1. **벤치마크 문서 세트 구축** — 합격 임계를 여기서 도출한다
+2. **렌더 → 비교 → 보정 루프** — `setProps` 연산과 함께
 3. `{{key}}` 형식 간 병합의 의미 정의 (설계에서 미해결로 남은 유일한 항목)
+4. 구조가 다른 문서 간 템플릿 추출 (LCS 정렬)
 
 ## 알려진 한계
 

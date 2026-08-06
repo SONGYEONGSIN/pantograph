@@ -76,7 +76,7 @@
 panto dump  <in.docx>                                     → stdout 덤프 JSON
 panto apply <in.docx> -p patch.json -o out.docx
 panto tmpl extract <a.docx> <b.docx> [...] -o tmpl.docx --schema schema.json
-panto tmpl fill    <tmpl.docx> -d data.json -o out.docx
+panto tmpl fill    <tmpl.docx> --schema schema.json -d data.json -o out.docx
 ```
 
 `tmpl fill`은 편의 기능이 아니다. **없으면 템플릿이 맞는지 검증할 방법이 없다** (I4).
@@ -121,7 +121,10 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 
 **경로 부여 규칙** — I3(결정성)의 근거:
 
-- 인덱스는 *같은 부모 아래 같은 로컬명* 기준 1-base: `word/body/p[3]/r[1]/t[1]`
+- 인덱스는 *같은 부모 아래 같은 로컬명* 기준 1-base: `word/body[1]/p[3]/r[1]/t[1]`
+- 인덱스를 **항상** 붙인다. 형제가 하나일 때 생략하는 규칙은 문서를 끝까지 읽어야
+  결정되므로 단일 패스 스캔이 불가능하고, 형제가 하나 늘면 기존 경로가 바뀌어
+  경로 안정성도 깨진다
 - 순수 함수. 난수·시각 없음
 - **속성은 정렬된 슬라이스로 낸다.** Go 맵 순회 순서가 랜덤이라 `map[string]string`을 그대로 JSON으로 내면 I3가 깨진다. 타입 수준에서 막는다
 
@@ -136,9 +139,9 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
     "scannedPart": "word/document.xml"
   },
   "nodes": [
-    { "path": "word/body/p[1]", "type": "p", "span": [302, 443],
+    { "path": "word/body[1]/p[1]", "type": "p", "span": [302, 443],
       "attrs": [{"name":"w14:paraId","value":"12AB34CD"}] },
-    { "path": "word/body/p[1]/r[1]/t[1]", "type": "t", "span": [396, 436],
+    { "path": "word/body[1]/p[1]/r[1]/t[1]", "type": "t", "span": [396, 436],
       "attrs": [{"name":"xml:space","value":"preserve"}], "text": "제목 " }
   ]
 }
@@ -163,14 +166,16 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 
 7번이 접근법의 대가를 치르는 지점이다 (§2.3).
 
+**op이 하나도 없는 패치(빈 패치)는 4번 이후 스플라이스가 없으므로 패키지를 건드리지 않고 그대로 반환한다.** 내용이 같아도 파트를 무조건 다시 쓰면 dirty 로 표시돼 `Package.Write`가 재압축을 하고, 재압축 결과가 원본과 바이트 단위로 같다는 보장이 없어 I1이 깨진다.
+
 ## 7. 패치 계약
 
 ```json
 {
   "hash": "sha256:…",
   "ops": [
-    {"op":"setText",    "path":"word/body/p[1]/r[1]", "text":"새 제목"},
-    {"op":"replaceRaw", "path":"word/body/tbl[1]",    "xml":"<w:tbl>…</w:tbl>"}
+    {"op":"setText",    "path":"word/body[1]/p[1]/r[1]/t[1]", "text":"새 제목"},
+    {"op":"replaceRaw", "path":"word/body[1]/tbl[1]",         "xml":"<w:tbl>…</w:tbl>"}
   ]
 }
 ```
@@ -180,6 +185,10 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 `setProps`를 뺀 이유: 이번 두 목표는 `setText`만으로 달성되고, 표현력은 `replaceRaw`가 전부 커버한다. `setProps`는 `w:pPr`가 없는 문단에 속성을 넣을 때 요소 삽입이 필요해 살이 붙는데, 그 살은 보정 루프 슬라이스에서 값을 한다.
 
 **`setText` 거절 규칙**: 대상 `w:t`에 `xml:space="preserve"`가 없는데 새 텍스트의 앞뒤에 공백이 있으면 거부하고 `replaceRaw`를 안내한다. 조용히 속성을 붙이면 원본에 없던 바이트가 생겨 I4a가 깨진다. **폴백하지 않고 거절한다.**
+
+**`setText` 거절 규칙 (둘째)**: 대상 `w:t`가 자기닫힘(`<w:t/>`)이면 거부하고 `replaceRaw`를 안내한다. 자기닫힘 요소는 시작·종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다 — 스캐너는 이 경우 안쪽 Span을 요소 바로 뒤의 폭 0 지점으로 보고하므로, 거기에 스플라이스하면 텍스트가 `w:t` 밖(형제 위치)에 들어가 well-formed 하지만 의미가 깨진 XML이 나온다. 적용 후 재스캔 검증은 well-formed 여부만 보므로 이 오류를 잡지 못한다.
+
+대안으로 `<w:t/>`를 `<w:t>text</w:t>`로 다시 써서 안쪽을 만들어주는 방법을 검토했으나 기각했다 — I4a를 깨기 때문이다. 템플릿을 빈 값으로 되채우면 원본은 `<w:t/>`인데 결과는 `<w:t></w:t>`가 되어 바이트가 갈린다.
 
 ## 8. 템플릿 역추출
 
@@ -201,14 +210,16 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 ```json
 { "base": "invoice-2024-01.docx", "hash": "sha256:…",
   "keys": [
-    {"key":"k1", "path":"word/body/p[2]/r[1]/t[1]", "samples":["홍길동","김철수"]},
-    {"key":"k2", "path":"word/body/tbl[1]/tr[2]/tc[3]/p[1]/r[1]/t[1]", "samples":["1,200,000","880,000"]}
+    {"key":"k1", "path":"word/body[1]/p[2]/r[1]/t[1]", "samples":["홍길동","김철수"]},
+    {"key":"k2", "path":"word/body[1]/tbl[1]/tr[2]/tc[3]/p[1]/r[1]/t[1]", "samples":["1,200,000","880,000"]}
   ]}
 ```
 
 **2번의 "완전 일치"가 v1의 절단면이다.** 문단 수가 다르면 실패한다. LCS 기반 유연 정렬은 그 자체로 별도 주제고, 지금 넣으면 이 슬라이스가 정렬 알고리즘 프로젝트가 된다.
 
 **3번에서 텍스트 외의 차이를 만나면 실패시킨다.** D₁의 것을 채택하고 넘어가면 조용한 손실이 생기고 I4a가 무의미해진다. 휘발성 속성만 명시적 예외로 둔다.
+
+구현상 비교 대상은 **요소 자신의 마크업**(`Type` + 휘발성 제외 `Attrs`)이다. 비단말 노드의 원문 바이트는 자손의 가변 텍스트를 포함하므로 그대로 비교하면 가변부가 있는 모든 조상이 거짓 불일치를 낸다.
 
 **비교 범위는 `word/document.xml`뿐이다.** `styles.xml`·`theme1.xml`·`numbering.xml` 등 다른 파트는 스캔하지 않으므로 비교하지도 않고, 템플릿은 D₁의 것을 그대로 쓴다. 이것이 I4b를 텍스트 수준으로 낮춰 잡은 두 번째 이유다 — D₂의 스타일이 D₁과 다르면 채운 결과가 D₂와 시각적으로 다를 수 있고, 이 설계는 그것을 잡지 못한다. **잡지 못한다는 사실을 숨기지 않는다.** 다중 파트 비교는 별도 슬라이스(§13).
 
@@ -222,7 +233,7 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 
 ```json
 {"ok": false, "errors": [
-  {"path":"word/body/p[99]", "reason":"path_not_found", "detail":"body에 w:p는 12개"}
+  {"path":"word/body[1]/p[99]", "reason":"path_not_found", "detail":"body에 w:p는 12개"}
 ]}
 ```
 
@@ -231,6 +242,25 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 | 0 | 성공 |
 | 1 | 입력 오류 — 경로 미해석 / hash 불일치 / Span 겹침 / setText 공백 거절 / 구조 불일치 |
 | 2 | 내부 오류 — 파일 손상 / I/O / 적용 후 재스캔 실패 |
+
+구현이 내는 `Reason` 전체 목록:
+
+| Reason | 뜻 | 코드 |
+|---|---|---|
+| `hash_mismatch` | 낙관적 잠금 실패 — 덤프 이후 문서가 바뀌었다 | 1 |
+| `path_not_found` | 경로가 문서에 없다 | 1 |
+| `unknown_op` | 알 수 없는 연산 (setText \| replaceRaw) | 1 |
+| `overlap` | 두 패치의 바이트 구간이 겹친다 | 1 |
+| `type_mismatch` | setText 대상이 `w:t` 가 아니다 | 1 |
+| `whitespace_needs_preserve` | 앞뒤 공백을 넣으려는데 `xml:space="preserve"` 가 없다 | 1 |
+| `self_closing_target` | setText 대상이 자기닫힘 요소라 텍스트 자리가 없다 | 1 |
+| `too_few_documents` | 템플릿 역추출에 문서가 2벌 미만 | 1 |
+| `structure_mismatch` | 문서 간 경로 집합이 다르다 | 1 |
+| `nontext_diff` | 텍스트 외의 마크업이 문서마다 다르다 | 1 |
+| `missing_key` | 데이터에 스키마의 키가 없다 | 1 |
+| `template_drift` | 템플릿의 해당 경로에 기대한 자리표시자가 없다 | 1 |
+
+`panto tmpl fill`은 키가 0개인 스키마를 입력 오류로 거절한다 — 빈 `keys` 배열을 그대로 두면 `missing_key`/`template_drift` 검사를 하나도 거치지 않고 `{{key}}` 자리표시자가 그대로 남은 템플릿을 "ok": true 로 내보내게 된다.
 
 에러는 항상 **경로**를 단다. 상위 설계의 "시스템은 차이를 경로로 가리키는 것까지"라는 역할 분담이 에러 메시지에도 적용된다.
 
@@ -263,6 +293,8 @@ RED 먼저. 불변식을 테스트로 고정한다.
 
 머신 탐색 결과 사용 가능한 `.docx`가 없었다 (발견된 5개는 레거시 바이너리 `.doc`/CFB 포맷으로 범위 밖이며, 실제 고객사 문서라 픽스처로 쓰려면 별도 판단이 필요하다).
 
+현재까지 어떤 불변식도 실제 Word가 만든 `.docx`로 검증되지 않았다. `TestIdentityReal`(I1)과 `TestLocalityReal`(I2)은 픽스처가 없어 설계대로 FAIL한다. I4a 증명도 지금은 프로젝트 자체 픽스처 생성기(`testdata/gen.go`)가 만든 문서에 대해서만 돈다 — §2.2가 지적한 ZIP64 · data descriptor · extra field 위험은 아직 검증되지 않은 채로 남아 있다.
+
 ## 11. 개발 순서
 
 ```
@@ -293,3 +325,4 @@ RED 먼저. 불변식을 테스트로 고정한다.
 - **`setProps`** — 보정 루프 슬라이스에서
 - **`w14:paraId` 재생성 규칙** — Word가 어떤 조건에서 재생성하는지 미확인. I4b를 텍스트 수준으로 낮춘 것이 이 불확실성에 대한 대응이다
 - **ZIP64 · data descriptor** — 실제 Word 파일에서의 거동 미확인 (§11의 1단계가 확인한다)
+- **문자 참조 인코딩 왕복** — 템플릿 채우기는 텍스트를 디코딩한 뒤 `&`, `<`, `>`만 다시 이스케이프해 재인코딩한다. 원본이 같은 문자를 다른(그러나 동등한) 인코딩 — 숫자 문자 참조 `&#38;`, 또는 `&quot;`/`&apos;` — 으로 썼다면 왕복 결과가 원본과 바이트 단위로 달라지고 I4a가 정당하게 실패한다. 현재 테스트는 한글·숫자·구두점만 쓰므로 이 경로를 건드리지 않는다. 실제 Word 문서는 `&amp;`를 흔히 쓰므로, 실제 픽스처가 들어오면 가장 먼저 확인할 지점이다
