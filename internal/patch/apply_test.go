@@ -329,6 +329,38 @@ func TestSetTextRejectsWhitespaceWithoutPreserve(t *testing.T) {
 	}
 }
 
+func TestSetTextRejectsSelfClosingTarget(t *testing.T) {
+	// self-closing <w:t/> 는 시작/종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다.
+	// wml.Scan 의 Inner 는 이 경우 요소 바로 뒤의 폭 0 위치를 가리킨다.
+	src := []byte(`<w:document xmlns:w="http://x"><w:body><w:p><w:r><w:t/></w:r></w:p></w:body></w:document>`)
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+	if err := p.Replace("word/document.xml", src); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	before, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	beforeCopy := append([]byte(nil), before...)
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Ops: []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "새 텍스트"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "self_closing_target" {
+		t.Fatalf("self-closing 대상이 거절되지 않았다: %+v", errs)
+	}
+	after, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Equal(beforeCopy, after) {
+		t.Fatalf("거절됐는데 문서가 바뀌었다:\nbefore=%s\nafter=%s", beforeCopy, after)
+	}
+}
+
 func TestSetTextAllowsWhitespaceWithPreserve(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"})) // 생성기가 preserve 를 붙인다
 	errs, err := patch.Apply(p, patch.Patch{

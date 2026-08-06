@@ -13,6 +13,8 @@ import (
 
 // xmlEscaper 는 텍스트 노드에서 의미를 갖는 세 글자만 이스케이프한다.
 // xml.EscapeText 는 개행·탭까지 문자 참조로 바꿔 원본에 없던 바이트를 만든다.
+// 이미 이스케이프된 입력(예: "&amp;")은 다시 이스케이프된다("&amp;amp;") —
+// op.Text 는 항상 순수 텍스트(디코딩된 값)로 취급하므로 의도된 동작이다.
 var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 type splice struct {
@@ -65,6 +67,17 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 					Path:   op.Path,
 					Reason: "type_mismatch",
 					Detail: fmt.Sprintf("setText 는 w:t 에만 쓸 수 있다 (대상 타입: %s)", n.Type),
+				})
+				continue
+			}
+			// self-closing <w:t/> 는 시작/종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다.
+			// wml.Scan 은 이때 Inner 를 요소 바로 뒤의 폭 0 위치로 준다 — 여기 스플라이스하면
+			// 텍스트가 w:t 밖(형제 위치)에 삽입돼 well-formed 지만 의미가 깨진다.
+			if n.Inner.Start >= n.Span.End {
+				errs = append(errs, Error{
+					Path:   op.Path,
+					Reason: "self_closing_target",
+					Detail: "대상 w:t 가 self-closing 이라 텍스트를 넣을 위치가 없다. replaceRaw 를 쓸 것",
 				})
 				continue
 			}
