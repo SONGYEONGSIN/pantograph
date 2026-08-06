@@ -19,5 +19,8 @@
 # reprompt 스크래치
 .reprompt/
 
+# subagent-driven-development 워크스페이스 (원장·브리프·리뷰 패키지)
+.superpowers/
+
 # Claude Code 개인 설정 (팀 공유 X)
 .claude/settings.local.json

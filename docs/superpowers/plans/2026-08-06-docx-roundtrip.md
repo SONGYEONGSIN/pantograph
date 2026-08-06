@@ -1119,7 +1119,7 @@ git commit -m "feat: 덤프 JSON 과 panto dump (I3)"
 - Produces:
   - `patch.Op{Op, Path, Text, XML string}`
   - `patch.Patch{Hash string; Ops []Op}`
-  - `patch.Error{Path, Reason, Detail string}` — `Reason` ∈ `hash_mismatch`, `path_not_found`, `unknown_op`, `overlap`, `type_mismatch`, `whitespace_needs_preserve`
+  - `patch.Error{Path, Reason, Detail string}` — 이 태스크의 `Reason` ∈ `hash_mismatch`, `path_not_found`, `unknown_op`, `overlap` (Task 5가 `type_mismatch`·`whitespace_needs_preserve`를 더한다)
   - `patch.Apply(p *opc.Package, pt Patch) ([]Error, error)` — 반환된 `[]Error`가 비어있지 않으면 **패키지는 손대지 않은 상태**다. `error`는 내부 오류(종료 코드 2)
   - `patch.Result{OK bool; Errors []Error}` — CLI 출력 봉투
 
@@ -1450,10 +1450,6 @@ import (
 	"github.com/SONGYEONGSIN/pantograph/internal/wml"
 )
 
-// xmlEscaper 는 텍스트 노드에서 의미를 갖는 세 글자만 이스케이프한다.
-// xml.EscapeText 는 개행·탭까지 문자 참조로 바꿔 원본에 없던 바이트를 만든다.
-var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
-
 type splice struct {
 	span wml.Span
 	repl []byte
@@ -1498,35 +1494,11 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 		switch op.Op {
 		case "replaceRaw":
 			splices = append(splices, splice{span: n.Span, repl: []byte(op.XML), path: op.Path})
-		case "setText":
-			if n.Type != "t" {
-				errs = append(errs, Error{
-					Path:   op.Path,
-					Reason: "type_mismatch",
-					Detail: fmt.Sprintf("setText 는 w:t 에만 쓸 수 있다 (대상 타입: %s)", n.Type),
-				})
-				continue
-			}
-			if strings.TrimSpace(op.Text) != op.Text {
-				if v, ok := n.Attr("space"); !ok || v != "preserve" {
-					errs = append(errs, Error{
-						Path:   op.Path,
-						Reason: "whitespace_needs_preserve",
-						Detail: `대상 w:t 에 xml:space="preserve" 가 없어 앞뒤 공백을 넣을 수 없다. replaceRaw 를 쓸 것`,
-					})
-					continue
-				}
-			}
-			splices = append(splices, splice{
-				span: n.Inner,
-				repl: []byte(xmlEscaper.Replace(op.Text)),
-				path: op.Path,
-			})
 		default:
 			errs = append(errs, Error{
 				Path:   op.Path,
 				Reason: "unknown_op",
-				Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw)", op.Op),
+				Detail: fmt.Sprintf("알 수 없는 연산: %s (replaceRaw)", op.Op),
 			})
 		}
 	}
@@ -1711,14 +1683,16 @@ git commit -m "feat: 패치 엔진 — 스플라이싱 적용과 원자성 (I2)"
 ## Task 5: `setText` 연산
 
 **Files:**
-- Modify: `internal/patch/apply_test.go` — setText 테스트 추가
-- Test: 같은 파일
+- Modify: `internal/patch/apply.go` — `setText` 분기 추가
+- Test: `internal/patch/apply_test.go` — setText 테스트 추가
 
 **Interfaces:**
-- Consumes: Task 4의 `patch.Apply` (setText 분기는 Task 4에서 이미 구현됨)
-- Produces: 새 API 없음. 이 태스크는 setText 계약을 테스트로 고정한다
+- Consumes: Task 4의 `patch.Apply`, `patch.Error`, `wml.Node.Attr`, `wml.Node.Inner`
+- Produces: `patch.Apply`가 `setText` 연산을 처리한다. `Error.Reason`에 `type_mismatch`·`whitespace_needs_preserve` 추가
 
 **왜 별도 태스크인가:** Task 4는 `replaceRaw`로 스플라이스 기계를 세운다. setText는 그 위의 얇은 계층이지만 **거절 규칙**(타입·공백)이 독립적으로 검토·거부될 수 있는 계약이다.
+
+**Task 4 시점의 상태:** `setText`는 아직 없다 — `default` 분기로 떨어져 `unknown_op`이 된다. 이 태스크의 RED가 바로 그것이다.
 
 - [ ] **Step 1: 실패하는 테스트 추가**
 
@@ -1811,16 +1785,72 @@ func TestSetTextAllowsWhitespaceWithPreserve(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 테스트 실행**
+- [ ] **Step 2: 테스트 실패 확인 (RED)**
 
 Run: `/opt/homebrew/bin/go test ./internal/patch/ -run 'TestSetText' -v`
-Expected: Task 4에서 setText를 구현했으므로 대부분 PASS. **실패하는 것이 있으면 그것이 이 태스크의 RED다** — Task 4의 구현을 최소로 고쳐 통과시킨다.
+Expected: 5개 전부 FAIL. `setText`가 `default` 분기로 떨어져 `unknown_op` 에러가 나므로:
+- `TestSetTextReplacesOnlyInnerText` — `errs` 가 비어있지 않아 실패
+- `TestSetTextRejectsNonTextNode` — `Reason`이 `unknown_op`(기대: `type_mismatch`)
+- `TestSetTextRejectsWhitespaceWithoutPreserve` — `Reason`이 `unknown_op`(기대: `whitespace_needs_preserve`)
 
-- [ ] **Step 3: 커밋**
+- [ ] **Step 3: `setText` 분기 구현**
+
+`internal/patch/apply.go` 파일 상단, `type splice struct` 바로 앞에 이스케이퍼를 추가한다:
+
+```go
+// xmlEscaper 는 텍스트 노드에서 의미를 갖는 세 글자만 이스케이프한다.
+// xml.EscapeText 는 개행·탭까지 문자 참조로 바꿔 원본에 없던 바이트를 만든다.
+var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+```
+
+`Apply` 의 op switch 에서 `case "replaceRaw":` 와 `default:` 사이에 분기를 넣는다:
+
+```go
+		case "setText":
+			if n.Type != "t" {
+				errs = append(errs, Error{
+					Path:   op.Path,
+					Reason: "type_mismatch",
+					Detail: fmt.Sprintf("setText 는 w:t 에만 쓸 수 있다 (대상 타입: %s)", n.Type),
+				})
+				continue
+			}
+			// 앞뒤 공백은 xml:space="preserve" 가 있어야만 허용한다.
+			// 없는데 속성을 붙여주면 원본에 없던 바이트가 생겨 I4a 가 깨진다.
+			if strings.TrimSpace(op.Text) != op.Text {
+				if v, ok := n.Attr("space"); !ok || v != "preserve" {
+					errs = append(errs, Error{
+						Path:   op.Path,
+						Reason: "whitespace_needs_preserve",
+						Detail: `대상 w:t 에 xml:space="preserve" 가 없어 앞뒤 공백을 넣을 수 없다. replaceRaw 를 쓸 것`,
+					})
+					continue
+				}
+			}
+			// Inner 만 교체한다 — 시작 태그의 속성을 건드리면 I4a 가 깨진다.
+			splices = append(splices, splice{
+				span: n.Inner,
+				repl: []byte(xmlEscaper.Replace(op.Text)),
+				path: op.Path,
+			})
+```
+
+`default:` 분기의 안내 문구도 갱신한다:
+
+```go
+				Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw)", op.Op),
+```
+
+- [ ] **Step 4: 테스트 통과 확인 (GREEN)**
+
+Run: `/opt/homebrew/bin/go test ./internal/patch/ -v`
+Expected: Task 4의 테스트를 포함해 전부 PASS (`TestLocalityReal`은 픽스처 필요)
+
+- [ ] **Step 5: 커밋**
 
 ```bash
 git add internal/patch
-git commit -m "test: setText 계약 고정 — 타입·공백 거절"
+git commit -m "feat: setText 연산 — Inner 교체와 타입·공백 거절"
 ```
 
 ---
