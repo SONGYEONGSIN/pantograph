@@ -11,6 +11,10 @@ import (
 	"github.com/SONGYEONGSIN/pantograph/internal/wml"
 )
 
+// xmlEscaper 는 텍스트 노드에서 의미를 갖는 세 글자만 이스케이프한다.
+// xml.EscapeText 는 개행·탭까지 문자 참조로 바꿔 원본에 없던 바이트를 만든다.
+var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
 type splice struct {
 	span wml.Span
 	repl []byte
@@ -55,11 +59,38 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 		switch op.Op {
 		case "replaceRaw":
 			splices = append(splices, splice{span: n.Span, repl: []byte(op.XML), path: op.Path})
+		case "setText":
+			if n.Type != "t" {
+				errs = append(errs, Error{
+					Path:   op.Path,
+					Reason: "type_mismatch",
+					Detail: fmt.Sprintf("setText 는 w:t 에만 쓸 수 있다 (대상 타입: %s)", n.Type),
+				})
+				continue
+			}
+			// 앞뒤 공백은 xml:space="preserve" 가 있어야만 허용한다.
+			// 없는데 속성을 붙여주면 원본에 없던 바이트가 생겨 I4a 가 깨진다.
+			if strings.TrimSpace(op.Text) != op.Text {
+				if v, ok := n.Attr("space"); !ok || v != "preserve" {
+					errs = append(errs, Error{
+						Path:   op.Path,
+						Reason: "whitespace_needs_preserve",
+						Detail: `대상 w:t 에 xml:space="preserve" 가 없어 앞뒤 공백을 넣을 수 없다. replaceRaw 를 쓸 것`,
+					})
+					continue
+				}
+			}
+			// Inner 만 교체한다 — 시작 태그의 속성을 건드리면 I4a 가 깨진다.
+			splices = append(splices, splice{
+				span: n.Inner,
+				repl: []byte(xmlEscaper.Replace(op.Text)),
+				path: op.Path,
+			})
 		default:
 			errs = append(errs, Error{
 				Path:   op.Path,
 				Reason: "unknown_op",
-				Detail: fmt.Sprintf("알 수 없는 연산: %s (replaceRaw)", op.Op),
+				Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw)", op.Op),
 			})
 		}
 	}

@@ -254,3 +254,88 @@ func TestEmptyPatchIsIdentity(t *testing.T) {
 		t.Fatal("빈 패치인데 바이트가 달라졌다 (I1)")
 	}
 }
+
+func TestSetTextReplacesOnlyInnerText(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"제목"})
+	p := open(t, src)
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "새 제목"}},
+	})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Contains(content, []byte(`<w:t xml:space="preserve">새 제목</w:t>`)) {
+		t.Fatalf("시작 태그가 보존되지 않았거나 텍스트가 안 바뀌었다: %s", content)
+	}
+	if !bytes.Contains(content, []byte(`w14:paraId="00000001"`)) {
+		t.Fatalf("문단의 휘발성 속성이 사라졌다: %s", content)
+	}
+}
+
+func TestSetTextEscapesMinimally(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "a&b<c>d\ne"}},
+	})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Contains(content, []byte("a&amp;b&lt;c&gt;d\ne")) {
+		t.Fatalf("이스케이프가 최소가 아니다 (개행이 문자 참조로 바뀌면 안 된다): %s", content)
+	}
+}
+
+func TestSetTextRejectsNonTextNode(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]", Text: "X"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "type_mismatch" {
+		t.Fatalf("w:t 가 아닌 노드가 거절되지 않았다: %+v", errs)
+	}
+}
+
+func TestSetTextRejectsWhitespaceWithoutPreserve(t *testing.T) {
+	// xml:space 속성이 없는 w:t
+	src := []byte(`<w:document xmlns:w="http://x"><w:body><w:p><w:r><w:t>제목</w:t></w:r></w:p></w:body></w:document>`)
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+	if err := p.Replace("word/document.xml", src); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Ops: []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "whitespace_needs_preserve" {
+		t.Fatalf("공백이 거절되지 않았다: %+v", errs)
+	}
+}
+
+func TestSetTextAllowsWhitespaceWithPreserve(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"})) // 생성기가 preserve 를 붙인다
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+	})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("preserve 가 있는데 거절됐다: err=%v errs=%+v", err, errs)
+	}
+}
