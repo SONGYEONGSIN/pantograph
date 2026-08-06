@@ -285,7 +285,7 @@ RED 먼저. 불변식을 테스트로 고정한다.
 
 | 층 | 조달 | 상태 |
 |---|---|---|
-| 최소 docx | `testdata/gen.go`가 코드로 생성 (결정론적, 생성기를 버전 관리) | 문제없음 |
+| 최소 docx | `internal/testutil/gen.go`가 코드로 생성 (결정론적, 생성기를 버전 관리) | 문제없음 |
 | 실제 Word 문서 1개 | 사용자 제공 → `testdata/real/`, git 커밋 | **미확보** |
 | 같은 양식 2벌 이상 | 사용자 제공 → `testdata/real/`, git 커밋 | **미확보** |
 
@@ -293,7 +293,7 @@ RED 먼저. 불변식을 테스트로 고정한다.
 
 머신 탐색 결과 사용 가능한 `.docx`가 없었다 (발견된 5개는 레거시 바이너리 `.doc`/CFB 포맷으로 범위 밖이며, 실제 고객사 문서라 픽스처로 쓰려면 별도 판단이 필요하다).
 
-현재까지 어떤 불변식도 실제 Word가 만든 `.docx`로 검증되지 않았다. `TestIdentityReal`(I1)과 `TestLocalityReal`(I2)은 픽스처가 없어 설계대로 FAIL한다. I4a 증명도 지금은 프로젝트 자체 픽스처 생성기(`testdata/gen.go`)가 만든 문서에 대해서만 돈다 — §2.2가 지적한 ZIP64 · data descriptor · extra field 위험은 아직 검증되지 않은 채로 남아 있다.
+현재까지 어떤 불변식도 실제 Word가 만든 `.docx`로 검증되지 않았다. `TestIdentityReal`(I1)과 `TestLocalityReal`(I2)은 픽스처가 없어 설계대로 FAIL한다. I4a 증명도 지금은 프로젝트 자체 픽스처 생성기(`internal/testutil/gen.go`)가 만든 문서에 대해서만 돈다 — §2.2가 지적한 ZIP64 · data descriptor · extra field 위험은 아직 검증되지 않은 채로 남아 있다.
 
 ## 11. 개발 순서
 
