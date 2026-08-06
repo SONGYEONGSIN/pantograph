@@ -59,13 +59,10 @@ func cmdApply(args []string) int {
 		return exitInput
 	}
 
-	// 출력 파일은 적용이 성공했을 때만 만든다 — 원자성 (spec §9)
-	f, err := os.Create(out)
-	if err != nil {
-		return die(exitInternal, "%v", err)
-	}
-	defer f.Close()
-	if err := p.Write(f); err != nil {
+	// 출력 파일은 적용이 성공했을 때만 만든다 — 원자성 (spec §9).
+	// writeAtomic 이 임시 파일에 쓰고 rename 하므로, 쓰기 도중 실패해도
+	// out 경로에 잘린 파일이 남지 않는다.
+	if err := writeAtomic(out, p.Write); err != nil {
 		return die(exitInternal, "%v", err)
 	}
 	if err := emit(patch.Result{OK: true}); err != nil {

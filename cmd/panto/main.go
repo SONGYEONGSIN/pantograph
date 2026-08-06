@@ -5,7 +5,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 )
 
 // 종료 코드 (spec §9)
@@ -40,6 +42,31 @@ func emit(v any) error {
 	}
 	_, err = os.Stdout.Write(append(b, '\n'))
 	return err
+}
+
+// writeAtomic 은 같은 디렉토리의 임시 파일에 쓴 뒤 rename 으로 교체한다.
+// 쓰기가 도중에 실패해도 대상 경로에 잘린 파일이 남지 않는다.
+func writeAtomic(path string, write func(io.Writer) error) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".panto-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+
+	if err := write(tmp); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 func main() {
