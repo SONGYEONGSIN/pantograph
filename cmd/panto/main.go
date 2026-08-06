@@ -50,6 +50,8 @@ func main() {
 	switch os.Args[1] {
 	case "dump":
 		os.Exit(cmdDump(os.Args[2:]))
+	case "apply":
+		os.Exit(cmdApply(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(exitInput)
