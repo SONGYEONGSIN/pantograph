@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/SONGYEONGSIN/pantograph/internal/testutil"
 )
 
 // TestWriteAtomicFailureLeavesDestinationUntouched 는 콜백이 도중에 실패해도
@@ -48,6 +51,68 @@ func TestWriteAtomicFailureLeavesDestinationUntouched(t *testing.T) {
 			names[i] = e.Name()
 		}
 		t.Fatalf("임시 파일이 남아있다: %v", names)
+	}
+}
+
+// captureStdout 는 f 실행 중 os.Stdout 을 파이프로 바꿔 emit() 이 쓴 내용을 돌려준다.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	f()
+	os.Stdout = orig
+	w.Close()
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("파이프 읽기 실패: %v", err)
+	}
+	return buf.String()
+}
+
+// TestTmplFillRejectsZeroKeySchema 는 리뷰 Finding 1 — 스키마에 키가
+// 하나도 없으면 (예: extract 를 동일 문서 2벌로 돌려 만든 스키마, 또는
+// "keys" 필드가 없는 아무 JSON) missing_key/template_drift 검사를
+// 전혀 거치지 않고 조용히 "ok": true 로 원본 그대로의 사본을 내보내는
+// 문제를 재현한다. Fill 이 빈 ops 로 patch.Apply 를 호출하면
+// (nil, nil) 이 돌아와 거절 없이 writeAtomic 까지 도달한다.
+func TestTmplFillRejectsZeroKeySchema(t *testing.T) {
+	dir := t.TempDir()
+
+	tplPath := filepath.Join(dir, "tmpl.docx")
+	if err := os.WriteFile(tplPath, testutil.MinimalDocx([]string{"청구서", "{{k1}}"}), 0o644); err != nil {
+		t.Fatalf("템플릿 파일 쓰기 실패: %v", err)
+	}
+	schemaPath := filepath.Join(dir, "schema.json")
+	if err := os.WriteFile(schemaPath, []byte(`{"base":"a.docx","hash":"sha256:x","keys":[]}`), 0o644); err != nil {
+		t.Fatalf("스키마 파일 쓰기 실패: %v", err)
+	}
+	dataPath := filepath.Join(dir, "data.json")
+	if err := os.WriteFile(dataPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("데이터 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdTmplFill([]string{tplPath, "--schema", schemaPath, "-d", dataPath, "-o", outPath})
+	})
+
+	if code != exitInput {
+		extra := ""
+		if out, err := os.ReadFile(outPath); err == nil {
+			extra = fmt.Sprintf(" — 출력 파일이 만들어졌고 내용은: %s", out)
+		}
+		t.Fatalf("빈 keys 스키마인데 exit=%d (기대 %d), stdout=%s%s", code, exitInput, stdout, extra)
+	}
+	if _, err := os.Stat(outPath); err == nil {
+		out, _ := os.ReadFile(outPath)
+		t.Fatalf("빈 keys 스키마인데 출력 파일이 만들어졌다: %s", out)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("출력 파일 상태 확인 실패: %v", err)
 	}
 }
 

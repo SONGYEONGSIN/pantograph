@@ -24,7 +24,7 @@ func usage() {
   panto dump  <in.docx>
   panto apply <in.docx> -p <patch.json> -o <out.docx>
   panto tmpl extract <a.docx> <b.docx> [...] -o <tmpl.docx> --schema <schema.json>
-  panto tmpl fill    <tmpl.docx> -d <data.json> -o <out.docx>
+  panto tmpl fill    <tmpl.docx> --schema <schema.json> -d <data.json> -o <out.docx>
 `)
 }
 

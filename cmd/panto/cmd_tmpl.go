@@ -136,6 +136,13 @@ func cmdTmplFill(args []string) int {
 	if err := json.Unmarshal(sb, &sch); err != nil {
 		return die(exitInput, "스키마 JSON 파싱 실패: %v", err)
 	}
+	// keys 가 비어있으면 Fill 이 만드는 ops 도 비어있어 patch.Apply 가
+	// (nil, nil) 을 돌려준다 — missing_key/template_drift 검사를 하나도
+	// 거치지 않고 원본 그대로의 사본을 "ok": true 로 내보내게 된다.
+	// "keys" 필드가 없는 JSON(예: 다른 스키마, 잘못된 경로)도 여기 걸린다.
+	if len(sch.Keys) == 0 {
+		return die(exitInput, "스키마에 키가 없다: %s", schemaPath)
+	}
 	db, err := os.ReadFile(dataPath)
 	if err != nil {
 		return die(exitInternal, "%v", err)
