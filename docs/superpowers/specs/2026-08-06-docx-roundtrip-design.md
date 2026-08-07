@@ -44,26 +44,32 @@
 | 중앙 디렉토리의 internal file attributes (레코드 +36) | `zip.FileHeader`에 필드가 없어 writer가 항상 0을 쓴다. Info-ZIP은 텍스트 엔트리에 bit 0을 세운다 → 길이는 같고 1바이트가 달라진다 |
 | 로컬 헤더의 extra field | `zip.Reader`는 **중앙** 레코드의 것만 채우고 writer는 그 사본을 양쪽에 찍는다. Info-ZIP의 `UT` 타임스탬프 extra는 로컬 쪽이 더 길어서 **파일 길이 자체**가 달라진다 |
 
-게이트가 실제로 거절하는 범위를 zip 생성기 4종으로 측정했다:
+이 손실은 `archive/zip` 안에서 고칠 방법이 없었다 — `zip.FileHeader`는 Extra 필드를 하나만 가지는데, `zip.Reader`는 그 필드를 **중앙** 레코드에서만 채우고 `zip.Writer`는 그 사본을 로컬·중앙 양쪽에 찍는다. 로컬과 중앙이 서로 다른 extra를 갖는 엔트리를 표현할 API 자체가 없다.
 
-| 생성기 | 결과 | 관측 |
+Word가 실제로 쓰는 extra가 정확히 그런 경우다: `0xA220`(Open Packaging Growth Hint — 파트를 제자리에서 키우려고 미리 잡아둔 예약 패딩, 엔트리당 264~520바이트)는 **로컬 헤더에만** 있고 중앙 레코드엔 없다. `archive/zip`으로는 이 엔트리를 원본과 같은 바이트로 다시 찍을 수 없었다.
+
+`17a7cfe`·`2bd98eb`에서 `archive/zip`을 버리고 zip을 직접 파싱·직접 출력하는 라이터로 바꿨다. 미수정 엔트리는 로컬 헤더째로 원본 바이트를 그대로 흘려보낸다 — growth hint 같은 로컬 전용 extra도 그 안에 실려 함께 살아남는다. 수정한 엔트리만 원본 로컬 헤더를 복사해 crc32·압축크기·원본크기 세 값을 제자리에서 고쳐 찍는다.
+
+같은 zip 생성기 4종 + Microsoft Word로 게이트의 거절 범위를 다시 측정했다 — `archive/zip` 재조립(이전) 대 자체 라이터(지금):
+
+| 생성기 | 이전 (`archive/zip` 재조립) | 지금 (자체 라이터) |
 |---|---|---|
-| Info-ZIP `zip -X` | 거절 | 첫 차이 offset 146 — 중앙 디렉토리 internal file attributes |
-| Info-ZIP `zip` | 거절 | 첫 차이 offset 28, 349 → 341 바이트 — 로컬 헤더 extra field |
-| macOS `ditto -c -k` | 거절 | 첫 차이 offset 28, 955 → 935 바이트 |
-| Python `zipfile` | 통과 | |
-| Python `zipfile` + data descriptor | 통과 | |
+| Info-ZIP `zip -X` | 거절 | 통과 |
+| Info-ZIP `zip` | 거절 | 통과 |
+| macOS `ditto -c -k` | 거절 | 통과 |
+| Python `zipfile` | 통과 | 통과 |
+| Microsoft Word | 거절 | 통과 |
 
-거절 범위는 "이색적인 예외"가 아니다 — Unix·macOS에서 가장 흔한 zip 생성기 둘(Info-ZIP, macOS 자체 압축 도구)이 거절당한다. data descriptor는 거절 원인이 아니다 (자연스러운 추정이지만 틀렸다) — 실제 원인은 위 표의 두 소실, internal file attributes 비트와 로컬/중앙 extra field 불일치다. Word 자신의 writer가 게이트를 통과하는지는 검증되지 않았다 — 실제 Word가 만든 .docx가 이 프로젝트에 한 번도 제공되지 않았다.
+`archive/zip` 시절의 거절 범위는 "이색적인 예외"가 아니었다 — Unix·macOS에서 가장 흔한 zip 생성기 둘(Info-ZIP, macOS 자체 압축 도구)이 거절당했고, Word 자신의 writer도 같은 이유로 거절당했다. data descriptor는 거절 원인이 아니다 (자연스러운 추정이지만 틀렸다) — 실제 원인은 위 표의 두 소실, internal file attributes 비트와 로컬/중앙 extra field 불일치(그리고 Word의 경우 `0xA220`)다. 지금은 넷 다 통과한다 — **게이트의 판정 기준(재조립 결과가 원본과 바이트 단위로 같은가)은 바뀌지 않았다.** 통과 범위가 넓어진 건 라이터가 더 많은 컨테이너를 실제로 재현할 수 있게 됐기 때문이지, 기준이 낮아졌기 때문이 아니다.
 
-이 때문에 I1을 "재조립 결과가 원본과 같다"에 기대면 안 된다. 대응은 두 겹이다:
+그래도 I1을 "재조립 결과가 원본과 같다"에 무조건 기대면 안 된다 — ZIP64·멀티 디스크·미지원 압축 방식 등 여전히 재현 못 하는 컨테이너가 있다. 대응은 두 겹이다:
 
 1. **빈 패치는 재조립하지 않는다.** 고친 파트가 하나도 없으면 `Write`가 원본 바이트를 그대로 흘려보낸다 — 항등 경로에서 헤더 재현 문제를 통째로 제거한다
 2. **열 때 재현 가능성을 검사한다.** `opc.Open`이 읽은 것을 즉시 되쓴 뒤 원본과 비교해, 다르면 `unsupported_container`로 **거절한다** (§9). 파트를 고치는 경로는 재조립을 피할 수 없으므로, 이 게이트가 "열린 파일은 재조립해도 안전하다"를 보장해 I2를 받쳐준다
 
 거절되는 실제 파일이 있을 수 있다. 그것이 의도다 — 폴백으로 근사하면 "안 건드린 것은 바이트 동일"이 조용히 거짓이 된다. 검증되지 않은 가정은 보증이 아니다.
 
-`TestIdentityGenerated`가 이 문제를 잡을 수 없었던 이유도 여기 있다: 픽스처 생성기가 `archive/zip` 자신이라, 헤더 축에서는 "Go의 zip writer가 Go의 zip writer가 쓴 것을 재현하는가"를 묻는 동어반복에 가깝다. `TestIdentityReal`이 필요한 이유다.
+`TestIdentityGenerated`가 이 문제를 잡을 수 없었던 이유도 여기 있다: 픽스처 생성기가 `archive/zip` 자신이라, 헤더 축에서는 "Go의 zip writer가 Go의 zip writer가 쓴 것을 재현하는가"를 묻는 동어반복에 가깝다. `TestIdentityReal`이 필요했던 이유이자, 지금 그 테스트가 실제 Word 문서 두 벌로 통과하는 이유다.
 
 ### 2.3 결론 — 바이트 오프셋 스플라이싱
 
@@ -91,6 +97,8 @@
 | **I3 결정성** | `dump(D)`를 두 번 | 동일 바이트의 JSON |
 | **I4a 템플릿 가역성 (베이스)** | `fill(extract({D₁..Dₙ}), values(D₁))` == `D₁` | 파트별 압축 해제 내용 바이트 동일 |
 | **I4b 템플릿 가역성 (그 외)** | i ≥ 2에 대해 `fill(…, values(Dᵢ))` vs `Dᵢ` | `word/document.xml`의 텍스트 노드 전체 일치 |
+
+I1·I2·I4a는 생성 픽스처뿐 아니라 실제 Word 문서(`testdata/real/`)로도 검증됐다 — `TestIdentityReal`·`TestLocalityReal`·`TestTemplateReversalReal` (§10). I3·I4b는 아직 생성 픽스처에 대해서만 돈다.
 
 **I4a가 이 설계의 심장이다.** 역추출이 텍스트 외의 무엇이라도 건드렸다면 원래 값으로 되채웠을 때 원본이 안 나온다. 시각 비교·사람 눈·임계값 없이 템플릿 기능의 정확성이 증명된다.
 
@@ -309,6 +317,8 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 | `missing_key` | 데이터에 스키마의 키가 없다 | 1 |
 | `template_drift` | 템플릿의 해당 경로에 기대한 자리표시자가 없다 | 1 |
 
+**`unsupported_container`는 열 때만 나지 않는다.** `opc.Open`의 자기검사 게이트가 잡는 것은 재조립 자체가 가능한지까지다. 그 이후에도 두 경로가 더 있다 — 파트를 열 때 미지원 압축 방식(store·deflate 외)을 만나 압축을 풀지 못할 때(`Part`), 그리고 수정한 컨테이너를 다시 조립한 결과가 32비트 오프셋을 넘어설 때(`Write`, 4 GiB 초과 출력). 어느 경로로 나든 결과는 같다 — stdout JSON + 종료 코드 1.
+
 `duplicate_path`를 `overlap`과 따로 두는 이유: 겹침 검사는 구간 비교(`start < 앞의 end`)라 폭 0 구간(빈 `<w:t></w:t>`의 안쪽)을 잡지 못한다. 같은 경로 자체를 검증 단계에서 거절하면 원인이 정확히 드러나고, 정렬이 안정 정렬이 아니어서 생기는 순서 비결정성(I3)도 함께 닫힌다.
 
 `panto tmpl fill`은 키가 0개인 스키마를 입력 오류로 거절한다 — 빈 `keys` 배열을 그대로 두면 `missing_key`/`template_drift` 검사를 하나도 거치지 않고 `{{key}}` 자리표시자가 그대로 남은 템플릿을 "ok": true 로 내보내게 된다.
@@ -337,14 +347,12 @@ RED 먼저. 불변식을 테스트로 고정한다.
 | 층 | 조달 | 상태 |
 |---|---|---|
 | 최소 docx | `internal/testutil/gen.go`가 코드로 생성 (결정론적, 생성기를 버전 관리) | 문제없음 |
-| 실제 Word 문서 1개 | 사용자 제공 → `testdata/real/`, git 커밋 | **미확보** |
-| 같은 양식 2벌 이상 | 사용자 제공 → `testdata/real/`, git 커밋 | **미확보** |
+| 실제 Word 문서 1개 | `testdata/real/form-a.docx` — Microsoft Word 16.x(macOS) 저장, git 커밋 (`9a0eb87`) | 확보. I1·I2 대상이자 I4a의 베이스 |
+| 같은 양식 2벌 이상 | `testdata/real/form-b.docx` — `form-a`와 같은 양식, 성명·금액·비고만 다름 | 확보. I4a(되채우기)의 두 번째 벌 |
 
-실제 문서가 없으면 I1·I2·I4 테스트는 **skip이 아니라 FAIL**로 둔다. 상위 설계가 "LibreOffice 없으면 없다고 보고하고 조용히 통과시키지 않는다"고 한 것과 같은 자세다.
+실제 문서가 없으면 I1·I2·I4 테스트는 **skip이 아니라 FAIL**로 둔다. 상위 설계가 "LibreOffice 없으면 없다고 보고하고 조용히 통과시키지 않는다"고 한 것과 같은 자세다. 지금 픽스처가 있어 통과하고 있을 뿐, 이 테스트들을 skip으로 바꾼 것은 아니다 — 픽스처가 없어지면 다시 FAIL로 돌아간다.
 
-머신 탐색 결과 사용 가능한 `.docx`가 없었다 (발견된 5개는 레거시 바이너리 `.doc`/CFB 포맷으로 범위 밖이며, 실제 고객사 문서라 픽스처로 쓰려면 별도 판단이 필요하다).
-
-현재까지 어떤 불변식도 실제 Word가 만든 `.docx`로 검증되지 않았다. `TestIdentityReal`(I1) · `TestLocalityReal`(I2) · `TestTemplateReversalReal`(I4a) 셋 다 픽스처가 없어 설계대로 FAIL한다. I4a 증명은 지금 프로젝트 자체 픽스처 생성기(`internal/testutil/gen.go`)가 만든 문서에 대해서만 돌며, §13의 문자 참조 왕복 한계(`&amp;` vs `&#38;`)가 드러날 자리도 바로 거기다 — §2.2가 지적한 ZIP64 · data descriptor · extra field 위험과 함께 아직 검증되지 않은 채로 남아 있다.
+`TestIdentityReal`(I1) · `TestLocalityReal`(I2) · `TestTemplateReversalReal`(I4a) 모두 이 픽스처로 GREEN이다 — §2.2가 지적한 ZIP64·data descriptor·extra field 위험은 이 두 실제 Word 문서에 대해서는 해소됐다. 남은 미검증은 §13의 문자 참조 왕복 한계다: `form-b.docx`의 `비고` 필드는 `&`를 담고 있고 Word가 `&amp;`로 쓰므로 I4a를 통과했지만, `&#38;`·`&quot;`·`&apos;`처럼 같은 문자를 다른 인코딩으로 쓰는 경우는 이 픽스처가 건드리지 않는다.
 
 ## 11. 개발 순서
 
@@ -376,4 +384,4 @@ RED 먼저. 불변식을 테스트로 고정한다.
 - **`setProps`** — 보정 루프 슬라이스에서
 - **`w14:paraId` 재생성 규칙** — Word가 어떤 조건에서 재생성하는지 미확인. I4b를 텍스트 수준으로 낮춘 것이 이 불확실성에 대한 대응이다
 - **ZIP64 · data descriptor** — 실제 Word 파일에서의 거동 미확인 (§11의 1단계가 확인한다)
-- **문자 참조 인코딩 왕복** — 템플릿 채우기는 텍스트를 디코딩한 뒤 `&`, `<`, `>`만 다시 이스케이프해 재인코딩한다. 원본이 같은 문자를 다른(그러나 동등한) 인코딩 — 숫자 문자 참조 `&#38;`, 또는 `&quot;`/`&apos;` — 으로 썼다면 왕복 결과가 원본과 바이트 단위로 달라지고 I4a가 정당하게 실패한다. 현재 테스트는 한글·숫자·구두점만 쓰므로 이 경로를 건드리지 않는다. 실제 Word 문서는 `&amp;`를 흔히 쓰므로, 실제 픽스처가 들어오면 가장 먼저 확인할 지점이다
+- **문자 참조 인코딩 왕복** — 템플릿 채우기는 텍스트를 디코딩한 뒤 `&`, `<`, `>`만 다시 이스케이프해 재인코딩한다. `testdata/real/form-b.docx`의 `비고` 필드에 `&`를 넣어 이 경로를 실제로 거쳤다 — Word가 `&amp;`로 쓰고 재인코더도 `&amp;`를 내므로 양쪽이 우연히 일치해 I4a가 통과했다. **이 한계가 해소됐다는 뜻은 아니다.** 원본이 같은 문자를 다른(그러나 동등한) 인코딩 — 숫자 문자 참조 `&#38;`, 또는 `&quot;`/`&apos;` — 으로 썼다면 왕복 결과가 원본과 바이트 단위로 달라지고 I4a가 정당하게 실패한다. 이 세 경로는 어떤 픽스처도 아직 건드리지 않았다

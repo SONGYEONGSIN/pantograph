@@ -26,7 +26,9 @@ type splice struct {
 // Apply 는 패치를 적용한다.
 //
 // 반환된 []Error 가 비어있지 않으면 패키지는 **손대지 않은 상태**다.
-// error 는 내부 오류(종료 코드 2)이며, 이때도 패키지는 수정되지 않는다.
+// error 는 보통 내부 오류(종료 코드 2)이지만, *opc.UnsupportedError 일 수도 있다 —
+// scannedPart 를 풀 때 미지원 압축 방식을 만나면 난다. CLI 는 이를 코드 1
+// (unsupported_container)로 매핑한다. 어느 경우든 패키지는 수정되지 않는다.
 func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	if pt.Hash != "" && pt.Hash != p.Hash {
 		return []Error{{
