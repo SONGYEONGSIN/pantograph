@@ -44,6 +44,18 @@
 | 중앙 디렉토리의 internal file attributes (레코드 +36) | `zip.FileHeader`에 필드가 없어 writer가 항상 0을 쓴다. Info-ZIP은 텍스트 엔트리에 bit 0을 세운다 → 길이는 같고 1바이트가 달라진다 |
 | 로컬 헤더의 extra field | `zip.Reader`는 **중앙** 레코드의 것만 채우고 writer는 그 사본을 양쪽에 찍는다. Info-ZIP의 `UT` 타임스탬프 extra는 로컬 쪽이 더 길어서 **파일 길이 자체**가 달라진다 |
 
+게이트가 실제로 거절하는 범위를 zip 생성기 4종으로 측정했다:
+
+| 생성기 | 결과 | 관측 |
+|---|---|---|
+| Info-ZIP `zip -X` | 거절 | 첫 차이 offset 146 — 중앙 디렉토리 internal file attributes |
+| Info-ZIP `zip` | 거절 | 첫 차이 offset 28, 349 → 341 바이트 — 로컬 헤더 extra field |
+| macOS `ditto -c -k` | 거절 | 첫 차이 offset 28, 955 → 935 바이트 |
+| Python `zipfile` | 통과 | |
+| Python `zipfile` + data descriptor | 통과 | |
+
+거절 범위는 "이색적인 예외"가 아니다 — Unix·macOS에서 가장 흔한 zip 생성기 둘(Info-ZIP, macOS 자체 압축 도구)이 거절당한다. data descriptor는 거절 원인이 아니다 (자연스러운 추정이지만 틀렸다) — 실제 원인은 위 표의 두 소실, internal file attributes 비트와 로컬/중앙 extra field 불일치다. Word 자신의 writer가 게이트를 통과하는지는 검증되지 않았다 — 실제 Word가 만든 .docx가 이 프로젝트에 한 번도 제공되지 않았다.
+
 이 때문에 I1을 "재조립 결과가 원본과 같다"에 기대면 안 된다. 대응은 두 겹이다:
 
 1. **빈 패치는 재조립하지 않는다.** 고친 파트가 하나도 없으면 `Write`가 원본 바이트를 그대로 흘려보낸다 — 항등 경로에서 헤더 재현 문제를 통째로 제거한다
