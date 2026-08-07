@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -171,14 +172,14 @@ func TestWriteAtomicSuccessReplacesDestination(t *testing.T) {
 func TestApplyReportsUnsupportedContainerAsInputError(t *testing.T) {
 	dir := t.TempDir()
 
-	// 중앙 디렉토리의 internal file attributes 에 bit 0 을 세운다 —
-	// zip.FileHeader 에 필드가 없어 재조립하면 0 이 되는 값이다.
+	// 중앙 레코드의 압축 크기를 ZIP64 sentinel 로 만든다 — 실제 값이 32비트
+	// 필드 밖(zip64 확장)에 있다는 뜻이라 이 writer 가 재조립할 수 없다.
 	src := testutil.MinimalDocx([]string{"제목"})
 	i := bytes.Index(src, []byte("PK\x01\x02"))
 	if i < 0 {
 		t.Fatal("중앙 디렉토리 레코드를 못 찾았다")
 	}
-	src[i+36] = 0x01
+	binary.LittleEndian.PutUint32(src[i+20:], 0xFFFFFFFF)
 
 	inPath := filepath.Join(dir, "in.docx")
 	if err := os.WriteFile(inPath, src, 0o644); err != nil {
