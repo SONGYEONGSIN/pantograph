@@ -48,31 +48,41 @@ func emit(v any) error {
 	return err
 }
 
-// openInput 은 docx 를 연다.
+// fail 은 오류 하나를 종료 코드로 바꾼다.
 //
 // 컨테이너를 바이트 동일하게 재현할 수 없는 파일은 **입력 오류**(코드 1)로
 // stdout JSON 에 보고한다. 내부 결함이 아니라 이 도구가 다룰 수 없는 입력의
 // 성질이므로, 코드 2(내부 오류)로 보내면 에이전트가 "재시도해도 소용없다"가
 // 아니라 "도구가 고장났다"로 잘못 읽는다 (spec §9).
 //
+// **열기 시점 게이트만의 이야기가 아니다.** opc 는 열린 뒤에도 UnsupportedError 를
+// 낸다 — 미지원 압축 방식의 파트를 풀 때(Part), 재조립 결과가 32비트 오프셋을
+// 넘을 때(Write). 그 경로들도 전부 여기를 지나야 계약이 한 곳에서 지켜진다.
+//
+// UnsupportedError 가 아니면 내부 오류(코드 2)로 stderr 에 보고한다.
+func fail(path string, err error) int {
+	var ue *opc.UnsupportedError
+	if !errors.As(err, &ue) {
+		return die(exitInternal, "%v", err)
+	}
+	if err := emit(patch.Result{OK: false, Errors: []patch.Error{{
+		Path:   path,
+		Reason: "unsupported_container",
+		Detail: ue.Detail,
+	}}}); err != nil {
+		return die(exitInternal, "%v", err)
+	}
+	return exitInput
+}
+
+// openInput 은 docx 를 연다.
 // 두 번째 반환값은 종료 코드다. exitOK 면 패키지가 유효하다.
 func openInput(path string) (*opc.Package, int) {
 	p, err := opc.Open(path)
 	if err == nil {
 		return p, exitOK
 	}
-	var ue *opc.UnsupportedError
-	if errors.As(err, &ue) {
-		if err := emit(patch.Result{OK: false, Errors: []patch.Error{{
-			Path:   path,
-			Reason: "unsupported_container",
-			Detail: ue.Detail,
-		}}}); err != nil {
-			return nil, die(exitInternal, "%v", err)
-		}
-		return nil, exitInput
-	}
-	return nil, die(exitInternal, "%v", err)
+	return nil, fail(path, err)
 }
 
 // writeAtomic 은 같은 디렉토리의 임시 파일에 쓴 뒤 rename 으로 교체한다.

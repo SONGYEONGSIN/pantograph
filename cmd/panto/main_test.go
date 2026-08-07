@@ -210,6 +210,127 @@ func TestApplyReportsUnsupportedContainerAsInputError(t *testing.T) {
 	}
 }
 
+// unsupportedMethodDocx 는 word/document.xml 의 압축 방식만 12(bzip2)로 바꾼
+// docx 를 만들어 경로를 돌려준다.
+//
+// 컨테이너 자체는 바이트 그대로 재현되므로 **열기 시점 게이트는 통과한다**.
+// 그 파트를 풀려는 순간에야 UnsupportedError 가 난다 — 즉 openInput 을 거치지
+// 않고 나오는 UnsupportedError 다. 이 종류가 종료 코드 1 로 나오는지가 핵심이다.
+func unsupportedMethodDocx(t *testing.T, path string) string {
+	t.Helper()
+	src := testutil.MinimalDocx([]string{"제목", "본문"})
+
+	eocd := bytes.LastIndex(src, []byte("PK\x05\x06"))
+	if eocd < 0 {
+		t.Fatal("EOCD 를 못 찾았다")
+	}
+	off := int(binary.LittleEndian.Uint32(src[eocd+16:]))
+	found := false
+	for range int(binary.LittleEndian.Uint16(src[eocd+10:])) {
+		nameLen := int(binary.LittleEndian.Uint16(src[off+28:]))
+		if string(src[off+46:off+46+nameLen]) == "word/document.xml" {
+			ls := int(binary.LittleEndian.Uint32(src[off+42:]))
+			binary.LittleEndian.PutUint16(src[off+10:], 12) // 중앙 레코드
+			binary.LittleEndian.PutUint16(src[ls+8:], 12)   // 로컬 헤더
+			found = true
+			break
+		}
+		off += 46 + nameLen + int(binary.LittleEndian.Uint16(src[off+30:])) +
+			int(binary.LittleEndian.Uint16(src[off+32:]))
+	}
+	if !found {
+		t.Fatal("word/document.xml 엔트리를 못 찾았다")
+	}
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	return path
+}
+
+// assertUnsupportedReported 는 명령이 입력 오류(코드 1) + stdout JSON 으로
+// 보고했는지 본다. 코드 2(내부 오류)로 나가면 종료 코드로 재시도 여부를 가르는
+// 에이전트가 "이 입력은 영원히 안 된다"를 "도구가 고장났다"로 읽는다 (spec §9).
+func assertUnsupportedReported(t *testing.T, code int, stdout, wantPath string) {
+	t.Helper()
+	if code != exitInput {
+		t.Fatalf("exit=%d (기대 %d) — UnsupportedError 가 내부 오류로 샜다. stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "unsupported_container") {
+		t.Fatalf("stdout 에 unsupported_container 가 없다: %s", stdout)
+	}
+	if !strings.Contains(stdout, wantPath) {
+		t.Fatalf("stdout 이 문제의 파일 경로를 달지 않았다: %s", stdout)
+	}
+}
+
+// TestDumpReportsUnsupportedMethodAsInputError 는 열기 이후에 나는
+// UnsupportedError(미지원 압축 방식)도 dump 에서 코드 1 로 나오는지 본다.
+func TestDumpReportsUnsupportedMethodAsInputError(t *testing.T) {
+	dir := t.TempDir()
+	in := unsupportedMethodDocx(t, filepath.Join(dir, "in.docx"))
+
+	var code int
+	stdout := captureStdout(t, func() { code = cmdDump([]string{in}) })
+	assertUnsupportedReported(t, code, stdout, in)
+}
+
+// TestApplyReportsUnsupportedMethodAsInputError 는 같은 것을 apply 에서 본다.
+// 빈 패치도 word/document.xml 을 풀어 스캔하므로 이 경로를 탄다.
+func TestApplyReportsUnsupportedMethodAsInputError(t *testing.T) {
+	dir := t.TempDir()
+	in := unsupportedMethodDocx(t, filepath.Join(dir, "in.docx"))
+	patchPath := filepath.Join(dir, "patch.json")
+	if err := os.WriteFile(patchPath, []byte(`{"ops":[]}`), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{in, "-p", patchPath, "-o", outPath})
+	})
+	assertUnsupportedReported(t, code, stdout, in)
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절됐는데 출력 파일이 만들어졌다: %v", err)
+	}
+}
+
+// TestTmplExtractReportsUnsupportedMethodAsInputError 는 tmpl extract 에서 본다.
+func TestTmplExtractReportsUnsupportedMethodAsInputError(t *testing.T) {
+	dir := t.TempDir()
+	a := unsupportedMethodDocx(t, filepath.Join(dir, "a.docx"))
+	b := unsupportedMethodDocx(t, filepath.Join(dir, "b.docx"))
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdTmplExtract([]string{a, b, "-o", filepath.Join(dir, "t.docx"),
+			"--schema", filepath.Join(dir, "schema.json")})
+	})
+	assertUnsupportedReported(t, code, stdout, a)
+}
+
+// TestTmplFillReportsUnsupportedMethodAsInputError 는 tmpl fill 에서 본다.
+func TestTmplFillReportsUnsupportedMethodAsInputError(t *testing.T) {
+	dir := t.TempDir()
+	in := unsupportedMethodDocx(t, filepath.Join(dir, "t.docx"))
+	schemaPath := filepath.Join(dir, "schema.json")
+	if err := os.WriteFile(schemaPath,
+		[]byte(`{"base":"t.docx","keys":[{"key":"k1","path":"word/body[1]/p[1]/r[1]/t[1]"}]}`), 0o644); err != nil {
+		t.Fatalf("스키마 파일 쓰기 실패: %v", err)
+	}
+	dataPath := filepath.Join(dir, "data.json")
+	if err := os.WriteFile(dataPath, []byte(`{"k1":"값"}`), 0o644); err != nil {
+		t.Fatalf("데이터 파일 쓰기 실패: %v", err)
+	}
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdTmplFill([]string{in, "--schema", schemaPath, "-d", dataPath,
+			"-o", filepath.Join(dir, "out.docx")})
+	})
+	assertUnsupportedReported(t, code, stdout, in)
+}
+
 // TestApplyEmptyPatchIsByteIdentical 은 CLI 전 경로(파일 읽기 → Apply →
 // writeAtomic)를 지나도 빈 패치가 바이트 동일 산출을 내는지 본다 (I1).
 func TestApplyEmptyPatchIsByteIdentical(t *testing.T) {

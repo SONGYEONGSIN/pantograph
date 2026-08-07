@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
@@ -61,9 +62,12 @@ func cmdTmplExtract(args []string) int {
 		names[i] = filepath.Base(in)
 	}
 
+	// Extract 는 입력 전부의 word/document.xml 을 푼다. 어느 문서가 문제인지는
+	// 에러에서 되짚을 수 없으므로 입력 목록 전체를 경로로 단다 — Detail 이
+	// 문제의 엔트리 이름을 갖고 있다.
 	tp, sch, errs, err := tmpl.Extract(pkgs, names)
 	if err != nil {
-		return die(exitInternal, "%v", err)
+		return fail(strings.Join(inputs, ", "), err)
 	}
 	if len(errs) > 0 {
 		if err := emit(patch.Result{OK: false, Errors: errs}); err != nil {
@@ -72,8 +76,9 @@ func cmdTmplExtract(args []string) int {
 		return exitInput
 	}
 
+	// tp 는 inputs[0] 에서 만들어진다 — 재조립이 거절되면 그 문서가 원인이다.
 	if err := writeAtomic(out, tp.Write); err != nil {
-		return die(exitInternal, "%v", err)
+		return fail(inputs[0], err)
 	}
 	sb, err := json.MarshalIndent(sch, "", "  ")
 	if err != nil {
@@ -152,9 +157,11 @@ func cmdTmplFill(args []string) int {
 		return die(exitInput, "데이터 JSON 파싱 실패: %v", err)
 	}
 
+	// Fill 은 템플릿의 word/document.xml 을 푼다 — 미지원 압축 방식이면 여기서
+	// UnsupportedError 가 난다.
 	errs, err := tmpl.Fill(tp, &sch, data)
 	if err != nil {
-		return die(exitInternal, "%v", err)
+		return fail(in, err)
 	}
 	if len(errs) > 0 {
 		if err := emit(patch.Result{OK: false, Errors: errs}); err != nil {
@@ -164,7 +171,7 @@ func cmdTmplFill(args []string) int {
 	}
 
 	if err := writeAtomic(out, tp.Write); err != nil {
-		return die(exitInternal, "%v", err)
+		return fail(in, err)
 	}
 	if err := emit(patch.Result{OK: true}); err != nil {
 		return die(exitInternal, "%v", err)

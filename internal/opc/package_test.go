@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -423,6 +424,123 @@ func TestModifiedEntryKeepsDataDescriptor(t *testing.T) {
 	}
 	if n := binary.LittleEndian.Uint32(e.desc[at+8:]); int(n) != len(newContent) {
 		t.Fatalf("descriptor 의 원본 크기가 %d — 새 내용은 %d바이트", n, len(newContent))
+	}
+
+	// APPNOTE 4.4.4 — descriptor 를 쓰는 엔트리는 로컬 헤더의 crc·크기가 0 이다.
+	// 여기를 안 보면 양쪽에 실제 값을 찍는 퇴행이 그대로 통과한다.
+	for _, f := range []struct {
+		name string
+		off  int
+	}{{"crc32", 14}, {"압축 크기", 18}, {"원본 크기", 22}} {
+		if v := binary.LittleEndian.Uint32(e.local[f.off:]); v != 0 {
+			t.Fatalf("descriptor 엔트리인데 로컬 헤더의 %s 가 0x%08x — 0 이어야 한다", f.name, v)
+		}
+	}
+}
+
+// TestTwoDirtyEntriesInOneWrite 는 한 번의 재조립에서 파트를 **둘** 고쳤을 때도
+// 오프셋·EOCD·descriptor 가 맞는지 본다.
+//
+// 오프셋을 "밀린 만큼 더하기"로 계산하면 dirty 가 하나일 때만 맞는다.
+// assemble 은 매 엔트리마다 offsets[i] = len(out) 로 다시 잡으므로 개수와 무관하게
+// 맞아야 한다 — 그 성질을 여기서 고정한다.
+func TestTwoDirtyEntriesInOneWrite(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"제목", "본문"})
+	p, err := opc.OpenBytes(src)
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	want := map[string][]byte{
+		"[Content_Types].xml": []byte(`<Types xmlns="urn:x"/>`),
+		"word/document.xml":   []byte(`<w:document><w:body><w:p/></w:body></w:document>`),
+	}
+	for name, content := range want {
+		if err := p.Replace(name, content); err != nil {
+			t.Fatalf("Replace %s: %v", name, err)
+		}
+	}
+	got, err := p.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+
+	// 게이트를 다시 통과해야 한다 — 오프셋·EOCD 가 자기정합이라는 뜻이다.
+	p2, err := opc.OpenBytes(got)
+	if err != nil {
+		t.Fatalf("두 파트를 고친 결과를 다시 열 수 없다: %v", err)
+	}
+	for name, content := range want {
+		c, err := p2.Part(name)
+		if err != nil {
+			t.Fatalf("Part %s: %v", name, err)
+		}
+		if !bytes.Equal(c, content) {
+			t.Fatalf("%s: 내용 불일치 — got %q, want %q", name, c, content)
+		}
+	}
+
+	// 안 건드린 나머지는 로컬 블록이 바이트 동일해야 한다.
+	before, after := walkZip(t, src), walkZip(t, got)
+	if !bytes.Equal(entryByName(t, before, "_rels/.rels").local, entryByName(t, after, "_rels/.rels").local) {
+		t.Fatal("_rels/.rels: 미수정 엔트리의 로컬 블록이 달라졌다")
+	}
+	// 고친 두 엔트리 모두 descriptor 가 남아있어야 한다 (원본이 갖고 있었으므로).
+	for name := range want {
+		if entryByName(t, after, name).desc == nil {
+			t.Fatalf("%s: 재조립 후 data descriptor 가 사라졌다", name)
+		}
+	}
+}
+
+// TestDecompressStopsAtDeclaredSize 는 압축 해제가 헤더가 선언한 크기 이상으로
+// 읽지 않는지 본다.
+//
+// 스트림과 crc 를 모두 쥔 쪽이 헤더보다 훨씬 크게 부푸는 데이터를 넣으면
+// (압축 폭탄) 상한 없는 io.ReadAll 은 메모리가 닿는 데까지 읽는다. 길이 검사는
+// **다 읽은 뒤에야** 도는 사후 검사라 할당을 막지 못한다.
+func TestDecompressStopsAtDeclaredSize(t *testing.T) {
+	const (
+		bomb     = 32 << 20 // 실제로 부푸는 크기
+		declared = 16       // 헤더가 주장하는 크기
+	)
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "word/document.xml", Method: zip.Deflate})
+	if err != nil {
+		t.Fatalf("CreateHeader: %v", err)
+	}
+	if _, err := w.Write(bytes.Repeat([]byte("A"), bomb)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	src := buf.Bytes()
+
+	// 중앙 레코드의 원본 크기만 낮춘다 — 로컬 블록은 손대지 않으므로 컨테이너는
+	// 바이트 그대로 재현되고 게이트를 통과한다.
+	i := bytes.Index(src, []byte("PK\x01\x02"))
+	if i < 0 {
+		t.Fatal("중앙 디렉토리 레코드를 못 찾았다")
+	}
+	binary.LittleEndian.PutUint32(src[i+24:], declared)
+
+	p, err := opc.OpenBytes(src)
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, perr := p.Part("word/document.xml")
+	runtime.ReadMemStats(&after)
+
+	if perr == nil {
+		t.Fatal("선언 크기와 다른데 압축 해제가 성공했다")
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 4<<20 {
+		t.Fatalf("%d바이트를 선언한 엔트리를 푸는 데 %d바이트를 할당했다 — 압축 폭탄에 상한이 없다",
+			declared, grew)
 	}
 }
 

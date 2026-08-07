@@ -348,8 +348,12 @@ func (pt *part) decompress() ([]byte, error) {
 	case methodDeflate:
 		fr := flate.NewReader(bytes.NewReader(raw))
 		defer fr.Close()
+		// 헤더가 선언한 크기 + 1 바이트에서 끊는다. 아래 길이 검사는 다 읽은
+		// **뒤에야** 도는 사후 검사라, 상한이 없으면 스트림과 crc 를 모두 쥔 쪽이
+		// 작은 크기를 선언하고 실제로는 메모리가 닿는 데까지 부풀릴 수 있다
+		// (압축 폭탄). +1 은 "선언보다 크다"를 길이 검사가 보게 하려는 것이다.
 		var err error
-		if content, err = io.ReadAll(fr); err != nil {
+		if content, err = io.ReadAll(io.LimitReader(fr, int64(pt.usize)+1)); err != nil {
 			return nil, fmt.Errorf("%s: 압축 해제 실패: %w", pt.name, err)
 		}
 	default:
