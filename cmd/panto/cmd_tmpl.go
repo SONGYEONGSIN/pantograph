@@ -53,9 +53,9 @@ func cmdTmplExtract(args []string) int {
 	pkgs := make([]*opc.Package, len(inputs))
 	names := make([]string, len(inputs))
 	for i, in := range inputs {
-		p, err := opc.Open(in)
-		if err != nil {
-			return die(exitInternal, "%v", err)
+		p, code := openInput(in)
+		if code != exitOK {
+			return code
 		}
 		pkgs[i] = p
 		names[i] = filepath.Base(in)
@@ -124,9 +124,9 @@ func cmdTmplFill(args []string) int {
 		return die(exitInput, "사용법: panto tmpl fill <tmpl.docx> --schema <schema.json> -d <data.json> -o <out.docx>")
 	}
 
-	tp, err := opc.Open(in)
-	if err != nil {
-		return die(exitInternal, "%v", err)
+	tp, code := openInput(in)
+	if code != exitOK {
+		return code
 	}
 	sb, err := os.ReadFile(schemaPath)
 	if err != nil {

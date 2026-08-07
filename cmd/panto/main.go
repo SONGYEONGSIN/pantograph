@@ -4,10 +4,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/SONGYEONGSIN/pantograph/internal/opc"
+	"github.com/SONGYEONGSIN/pantograph/internal/patch"
 )
 
 // 종료 코드 (spec §9)
@@ -44,6 +48,33 @@ func emit(v any) error {
 	return err
 }
 
+// openInput 은 docx 를 연다.
+//
+// 컨테이너를 바이트 동일하게 재현할 수 없는 파일은 **입력 오류**(코드 1)로
+// stdout JSON 에 보고한다. 내부 결함이 아니라 이 도구가 다룰 수 없는 입력의
+// 성질이므로, 코드 2(내부 오류)로 보내면 에이전트가 "재시도해도 소용없다"가
+// 아니라 "도구가 고장났다"로 잘못 읽는다 (spec §9).
+//
+// 두 번째 반환값은 종료 코드다. exitOK 면 패키지가 유효하다.
+func openInput(path string) (*opc.Package, int) {
+	p, err := opc.Open(path)
+	if err == nil {
+		return p, exitOK
+	}
+	var ue *opc.UnsupportedError
+	if errors.As(err, &ue) {
+		if err := emit(patch.Result{OK: false, Errors: []patch.Error{{
+			Path:   path,
+			Reason: "unsupported_container",
+			Detail: ue.Detail,
+		}}}); err != nil {
+			return nil, die(exitInternal, "%v", err)
+		}
+		return nil, exitInput
+	}
+	return nil, die(exitInternal, "%v", err)
+}
+
 // writeAtomic 은 같은 디렉토리의 임시 파일에 쓴 뒤 rename 으로 교체한다.
 // 쓰기가 도중에 실패해도 대상 경로에 잘린 파일이 남지 않는다.
 func writeAtomic(path string, write func(io.Writer) error) error {
@@ -54,6 +85,21 @@ func writeAtomic(path string, write func(io.Writer) error) error {
 	tmpPath := tmp.Name()
 
 	if err := write(tmp); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	// rename 은 동시 독자에 대해서만 원자적이다. 크래시에 대해서는 아니라서,
+	// 데이터가 디스크에 닿기 전에 rename 이 먼저 반영되면 대상 경로에
+	// 길이 0 인 파일이 살아남을 수 있다.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	// os.CreateTemp 은 0600 으로 만든다. 그대로 두면 산출물이 소유자 전용이 되어
+	// os.Create(0666 & ^umask) 로 만들었을 때와 권한이 달라진다.
+	if err := tmp.Chmod(0o644); err != nil {
 		tmp.Close()
 		os.Remove(tmpPath)
 		return err

@@ -48,7 +48,24 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	// 1) 모든 op 을 검증한다. 하나라도 실패하면 아무것도 적용하지 않는다.
 	var errs []Error
 	splices := make([]splice, 0, len(pt.Ops))
+	seen := make(map[string]bool, len(pt.Ops))
 	for _, op := range pt.Ops {
+		// 같은 경로에 연산이 둘 이상이면 거절한다.
+		//
+		// 겹침 검사(splices[i].start < splices[i-1].end)는 폭 0 구간을 못 잡는다:
+		// 빈 <w:t></w:t> 의 안쪽은 [p,p) 라 p < p 가 거짓이 되어 둘 다 통과하고,
+		// 같은 지점에 두 번 스플라이스돼 텍스트가 조용히 이어붙는다.
+		// 게다가 sort.Slice 는 안정 정렬이 아니라 이어붙는 순서도 정의되지 않는다 (I3).
+		if seen[op.Path] {
+			errs = append(errs, Error{
+				Path:   op.Path,
+				Reason: "duplicate_path",
+				Detail: "같은 경로를 가리키는 연산이 둘 이상이다 — 적용 순서가 정의되지 않는다",
+			})
+			continue
+		}
+		seen[op.Path] = true
+
 		n, ok := tree.Lookup(op.Path)
 		if !ok {
 			errs = append(errs, Error{
@@ -83,8 +100,10 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 			}
 			// 앞뒤 공백은 xml:space="preserve" 가 있어야만 허용한다.
 			// 없는데 속성을 붙여주면 원본에 없던 바이트가 생겨 I4a 가 깨진다.
+			// 네임스페이스까지 본다 — 로컬명만 보면 아무 네임스페이스의
+			// space 속성이나 xml:space 로 통과한다.
 			if strings.TrimSpace(op.Text) != op.Text {
-				if v, ok := n.Attr("space"); !ok || v != "preserve" {
+				if v, ok := n.AttrNS(wml.XMLNS, "space"); !ok || v != "preserve" {
 					errs = append(errs, Error{
 						Path:   op.Path,
 						Reason: "whitespace_needs_preserve",
@@ -142,24 +161,56 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 		out = buf.Bytes()
 	}
 
-	// 4) 결과 재스캔 — 바이트를 잘라 붙였으므로 파서가 막아주지 않는다
+	// 4) 결과 재스캔 — 바이트를 잘라 붙였으므로 파서가 막아주지 않는다.
+	//
+	// 실패해도 되돌릴 것이 없다: 스플라이스는 지역 버퍼 out 에만 쌓았고
+	// p.Replace 는 아래에서 처음 호출된다. 트랜잭션을 연 적이 없으니 닫을 것도 없다.
+	//
+	// 결함은 전적으로 호출자가 준 XML 에 있으므로 입력 오류(코드 1)로 보고한다.
+	// 내부 오류(코드 2)로 보내면, 종료 코드로 재시도 여부를 판단하는 에이전트가
+	// "패치를 고쳐 다시 시도"가 아니라 "도구가 고장났으니 포기"로 잘못 분기한다 (spec §9).
 	if _, err := wml.Scan(out); err != nil {
-		return nil, fmt.Errorf("적용 결과가 유효한 XML 이 아니다 (롤백함): %w", err)
+		return []Error{{
+			Path:   blame(content, splices),
+			Reason: "invalid_xml",
+			Detail: fmt.Sprintf("적용 결과가 유효한 XML 이 아니다 (문서는 손대지 않았다): %v", err),
+		}}, nil
 	}
 
 	return nil, p.Replace(dump.ScannedPart, out)
 }
 
+// blame 은 결과 XML 을 깨뜨린 op 의 경로를 짚는다.
+//
+// 스플라이스를 하나씩만 적용해 재스캔한다 — 단독으로 적용해도 깨지는 것이 장본인이다.
+// 실패 경로에서만 도는 계산이다. 모두 단독으로는 유효한데 조합에서만 깨지는 경우는
+// 첫 스플라이스를 지목한다 (경로 없는 에러를 내느니 결정론적으로 하나를 짚는다).
+func blame(content []byte, splices []splice) string {
+	for _, s := range splices {
+		var buf bytes.Buffer
+		buf.Grow(len(content) - s.span.Len() + len(s.repl))
+		buf.Write(content[:s.span.Start])
+		buf.Write(s.repl)
+		buf.Write(content[s.span.End:])
+		if _, err := wml.Scan(buf.Bytes()); err != nil {
+			return s.path
+		}
+	}
+	return splices[0].path
+}
+
 // nearbyHint 는 경로를 못 찾았을 때 형제 개수를 알려준다.
+// 형태를 못 알아본 경로는 왜 힌트를 못 주는지 말한다 — 빈 detail 로 침묵하지 않는다.
 func nearbyHint(tree *wml.Tree, path string) string {
+	const shape = `경로 형태가 "부모/이름[n]" 이 아니라 형제 수를 셀 수 없다 (루트는 "word")`
 	i := strings.LastIndex(path, "/")
 	if i < 0 {
-		return ""
+		return shape
 	}
 	parent, leaf := path[:i], path[i+1:]
 	j := strings.Index(leaf, "[")
 	if j < 0 {
-		return ""
+		return shape
 	}
 	name := leaf[:j]
 	count := 0

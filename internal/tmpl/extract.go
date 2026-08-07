@@ -122,8 +122,8 @@ func diffStructure(a, b *wml.Tree, an, bn string) *patch.Error {
 	return nil
 }
 
-// diffMarkup 은 요소 자신의 마크업(타입 + 휘발성 제외 속성)이 같은지 본다.
-// 자손의 텍스트는 여기서 보지 않는다 — 그건 가변부 판별의 몫이다.
+// diffMarkup 은 요소 자신의 마크업(타입 + 휘발성 제외 속성 + w:t 밖의 텍스트)이
+// 같은지 본다. 자손의 텍스트는 여기서 보지 않는다 — 그건 가변부 판별의 몫이다.
 func diffMarkup(bn wml.Node, trees []*wml.Tree, idx int, names []string) *patch.Error {
 	baseAttrs := stableAttrs(bn)
 	for i := 1; i < len(trees); i++ {
@@ -133,6 +133,25 @@ func diffMarkup(bn wml.Node, trees []*wml.Tree, idx int, names []string) *patch.
 				Path:   bn.Path,
 				Reason: "nontext_diff",
 				Detail: fmt.Sprintf("%s 는 %s, %s 는 %s", names[0], bn.Type, names[i], other.Type),
+			}
+		}
+		// w:t 가 아닌 요소의 텍스트도 비교한다.
+		//
+		// 가변부 판별은 w:t 만 본다. 여기서 걸러내지 않으면 w:instrText
+		// (메일머지·페이지 번호·상호참조·TOC 를 Word 가 인코딩하는 요소) 같은
+		// 다른 요소의 텍스트 차이가 어느 쪽 검사에도 안 걸려 D₁ 의 것이 조용히
+		// 채택된다. 그러면 I4a 가 무의미해진다 (spec §8).
+		//
+		// 스캐너는 CharData 를 가장 안쪽 프레임에만 쌓으므로, 여기 걸리는 것은
+		// 요소가 **직접** 품은 텍스트뿐이다. 비단말 요소에서는 요소 사이 공백이
+		// 그것인데, Word 는 document.xml 을 들여쓰기 없이 쓰므로 보통 빈 문자열이다.
+		// 들여쓰기가 서로 다른 문서는 여기서 거절된다 — 조용히 한쪽을 고르는 것보다 낫다.
+		if bn.Type != "t" && other.Text != bn.Text {
+			return &patch.Error{
+				Path:   bn.Path,
+				Reason: "nontext_diff",
+				Detail: fmt.Sprintf("w:t 밖의 텍스트가 다르다 (%s 는 %q, %s 는 %q)",
+					names[0], bn.Text, names[i], other.Text),
 			}
 		}
 		otherAttrs := stableAttrs(other)

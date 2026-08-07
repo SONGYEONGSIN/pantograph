@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
 )
 
@@ -35,9 +34,9 @@ func cmdApply(args []string) int {
 		return die(exitInput, "사용법: panto apply <in.docx> -p <patch.json> -o <out.docx>")
 	}
 
-	p, err := opc.Open(in)
-	if err != nil {
-		return die(exitInternal, "%v", err)
+	p, code := openInput(in)
+	if code != exitOK {
+		return code
 	}
 	pb, err := os.ReadFile(patchPath)
 	if err != nil {

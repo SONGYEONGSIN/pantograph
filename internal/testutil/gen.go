@@ -38,13 +38,22 @@ func MinimalDocx(paragraphs []string) []byte {
 		body.WriteString(escaper.Replace(p))
 		body.WriteString(`</w:t></w:r></w:p>`)
 	}
+	return DocxWithBody(body.String())
+}
 
+// DocxWithBody 는 <w:body> 안쪽 마크업을 직접 받아 docx 를 만든다.
+// MinimalDocx 가 못 만드는 요소(w:instrText, 들여쓰기 등)를 다루는 테스트용이다.
+//
+// Package.Replace 로 내용을 갈아끼우는 방식과 다른 점: 그렇게 하면 원본 zip
+// 바이트(Package.Source)는 옛 내용 그대로라, Source 를 다시 여는 코드
+// (tmpl.Extract 의 템플릿 생성 단계)가 갈아끼운 내용을 보지 못한다.
+func DocxWithBody(body string) []byte {
 	doc := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
 		`<w:document ` +
 		`xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ` +
 		`xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" ` +
 		`xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" ` +
-		`mc:Ignorable="w14"><w:body>` + body.String() + `</w:body></w:document>`
+		`mc:Ignorable="w14"><w:body>` + body + `</w:body></w:document>`
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)

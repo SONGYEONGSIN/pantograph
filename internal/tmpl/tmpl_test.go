@@ -2,6 +2,7 @@ package tmpl_test
 
 import (
 	"bytes"
+	"path/filepath"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
@@ -171,6 +172,83 @@ func TestExtractRejectsNonTextDiff(t *testing.T) {
 	}
 }
 
+// fieldDoc 은 w:instrText(필드 명령)와 w:t(표시 텍스트)를 갖는 문서를 만든다.
+// w:instrText 는 Word 가 메일머지·페이지 번호·상호참조·TOC 를 인코딩하는 요소다.
+func fieldDoc(t *testing.T, instr, text string) *opc.Package {
+	t.Helper()
+	p, err := opc.OpenBytes(testutil.DocxWithBody(
+		`<w:p><w:r><w:instrText>` + instr + `</w:instrText></w:r>` +
+			`<w:r><w:t xml:space="preserve">` + text + `</w:t></w:r></w:p>`))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	return p
+}
+
+// TestExtractRejectsInstrTextDiff 는 F-C1 회귀 테스트다.
+//
+// 가변부 판별은 Type == "t" 인 노드만 보고, diffMarkup 은 Type 과 속성만 봤다.
+// 그래서 w:t 가 아닌 요소가 나르는 텍스트 차이는 어느 검사에도 안 걸려
+// D₁ 의 것이 조용히 채택됐다 — 메일머지 양식이 바로 이 기능의 대표 입력인데도.
+// spec §8 이 명시적으로 금지하는 동작이다.
+func TestExtractRejectsInstrTextDiff(t *testing.T) {
+	a := fieldDoc(t, "MERGEFIELD Name", "홍길동")
+	b := fieldDoc(t, "MERGEFIELD Company", "김철수")
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "nontext_diff" {
+		t.Fatalf("필드 명령의 차이가 거절되지 않았다: %+v", errs)
+	}
+	if errs[0].Path != "word/body[1]/p[1]/r[1]/instrText[1]" {
+		t.Fatalf("갈라진 경로를 정확히 지목하지 않았다: %+v", errs[0])
+	}
+}
+
+// TestExtractAcceptsIdenticalInstrText 는 같은 필드 명령이면 통과하고 w:t 의
+// 차이는 여전히 가변부로 잡히는지 본다 — 위 거절이 과하지 않음을 고정한다.
+func TestExtractAcceptsIdenticalInstrText(t *testing.T) {
+	a := fieldDoc(t, "MERGEFIELD Name", "홍길동")
+	b := fieldDoc(t, "MERGEFIELD Name", "김철수")
+
+	_, sch, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("같은 필드 명령인데 거절됐다: err=%v errs=%+v", err, errs)
+	}
+	if len(sch.Keys) != 1 || sch.Keys[0].Path != "word/body[1]/p[1]/r[2]/t[1]" {
+		t.Fatalf("w:t 의 차이가 가변부로 잡히지 않았다: %+v", sch.Keys)
+	}
+}
+
+// TestExtractRejectsIndentationDiff 는 F-C1 수정의 대가를 문서로 고정한다.
+//
+// 스캐너는 CharData 를 가장 안쪽 프레임에만 쌓으므로, 요소 사이의 공백은 부모
+// 노드의 Text 가 된다. 따라서 document.xml 을 서로 다르게 들여쓴 두 문서는
+// 이제 nontext_diff 로 거절된다. Word 는 document.xml 을 들여쓰기 없이 쓰므로
+// 실제로는 잘 만나지 않지만, 만나면 조용히 한쪽을 고르는 대신 거절한다.
+func TestExtractRejectsIndentationDiff(t *testing.T) {
+	a, err := opc.OpenBytes(testutil.DocxWithBody(
+		`<w:p><w:r><w:t xml:space="preserve">고정</w:t></w:r></w:p>`))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	b, err := opc.OpenBytes(testutil.DocxWithBody(
+		"\n  <w:p>\n    <w:r><w:t xml:space=\"preserve\">고정</w:t></w:r>\n  </w:p>\n"))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "nontext_diff" {
+		t.Fatalf("들여쓰기가 다른 문서가 거절되지 않았다 (거절이 기대 동작이다): %+v", errs)
+	}
+}
+
 func TestExtractRequiresTwoDocuments(t *testing.T) {
 	ps, names := pkgs(t, []string{"A"})
 	_, _, errs, err := tmpl.Extract(ps, names)
@@ -219,6 +297,61 @@ func TestTemplateReversalBase(t *testing.T) {
 	}
 	if !bytes.Equal(want, got) {
 		t.Fatalf("I4a 위반 — 베이스로 되채웠는데 원본과 다르다\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	}
+}
+
+// I4a — 실제 Word 문서. 픽스처가 없으면 FAIL 이다. skip 으로 바꾸지 말 것 (spec §10).
+//
+// TestTemplateReversalBase 는 프로젝트 자체 생성기가 만든 문서로만 돈다. I4a 는
+// 이 설계의 심장인데(spec §3), 실제 Word 산출물에 대해서는 한 번도 평가된 적이 없다.
+// 실제 문서가 들어오면 spec §13 의 문자 참조 왕복 한계(&amp; vs &#38;)가 가장 먼저
+// 드러날 곳이기도 하다. 그 자리를 비워두면 픽스처가 들어와도 아무도 확인하지 않는다.
+func TestTemplateReversalReal(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "testdata", "real", "*.docx"))
+	if err != nil {
+		t.Fatalf("Glob: %v", err)
+	}
+	if len(paths) < 2 {
+		t.Fatalf("testdata/real/*.docx 가 %d개 — I4a 는 같은 양식의 실제 Word 문서 2벌 이상으로만 의미가 있다 (spec §10)", len(paths))
+	}
+
+	ps := make([]*opc.Package, len(paths))
+	names := make([]string, len(paths))
+	for i, path := range paths {
+		p, err := opc.Open(path)
+		if err != nil {
+			t.Fatalf("Open %s: %v", path, err)
+		}
+		ps[i] = p
+		names[i] = filepath.Base(path)
+	}
+
+	tp, sch, errs, err := tmpl.Extract(ps, names)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+	vals, err := tmpl.Values(ps[0], sch)
+	if err != nil {
+		t.Fatalf("Values: %v", err)
+	}
+	filled, err := opc.OpenBytes(mustBytes(t, tp))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	if fe, err := tmpl.Fill(filled, sch, vals); err != nil || len(fe) != 0 {
+		t.Fatalf("Fill: err=%v errs=%+v", err, fe)
+	}
+
+	want, err := ps[0].Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	got, err := filled.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Equal(want, got) {
+		t.Fatalf("I4a 위반 — %s 를 자기 값으로 되채웠는데 원본과 다르다", names[0])
 	}
 }
 

@@ -21,10 +21,19 @@ type Attr struct {
 	Value string `json:"value"`
 }
 
+// XMLNS 는 xml: 접두사가 가리키는 네임스페이스 URI 다.
+// encoding/xml 이 xml:space 같은 속성의 Space 를 이 값으로 번역한다.
+const XMLNS = "http://www.w3.org/XML/1998/namespace"
+
 // Node 는 요소 하나다.
 //
 //	Span  요소 전체 — 시작 태그의 '<' 부터 종료 태그의 '>' 다음까지
 //	Inner 시작 태그와 종료 태그 사이. 자기닫힘 요소는 빈 구간
+//	Attrs 원문 순서의 속성. **네임스페이스 선언(xmlns:w=…)도 여기 들어온다** —
+//	      encoding/xml 이 그것을 일반 속성으로 돌려주기 때문이다. 루트 노드의
+//	      경우 {Name:"w", NS:"xmlns"} 같은 항목이 보인다. 진짜 속성만 필요하면
+//	      NS == "xmlns" 인 항목을 걸러야 한다
+//	Text  이 요소가 **직접** 품은 문자 데이터. 자손의 텍스트는 포함하지 않는다
 type Node struct {
 	Path  string `json:"path"`
 	Type  string `json:"type"`
@@ -35,9 +44,20 @@ type Node struct {
 }
 
 // Attr 은 로컬명으로 속성을 찾는다.
+// 네임스페이스를 가리지 않으므로, 접두사가 의미를 갖는 속성에는 AttrNS 를 쓸 것.
 func (n Node) Attr(local string) (string, bool) {
 	for _, a := range n.Attrs {
 		if a.Name == local {
+			return a.Value, true
+		}
+	}
+	return "", false
+}
+
+// AttrNS 는 네임스페이스 URI + 로컬명으로 속성을 찾는다.
+func (n Node) AttrNS(ns, local string) (string, bool) {
+	for _, a := range n.Attrs {
+		if a.Name == local && a.NS == ns {
 			return a.Value, true
 		}
 	}

@@ -12,11 +12,18 @@ type Key struct {
 	Samples []string `json:"samples"`
 }
 
-// Schema 는 역추출 결과다. Hash 는 베이스 문서의 hash 다.
+// Schema 는 역추출 결과다.
 type Schema struct {
 	Base string `json:"base"`
+
+	// Hash 는 베이스 문서의 hash 다. **정보 항목이지 잠금이 아니다** —
+	// 어느 문서에서 이 템플릿이 나왔는지 기록할 뿐, 이 값을 대조하는 코드 경로는
+	// 없다. Fill 은 사용자가 템플릿 파일을 따로 손댈 수 있다고 보고 hash 대조를
+	// 하지 않으며, 대신 경로마다 자리표시자가 그대로인지 확인해
+	// template_drift 로 거절한다.
 	Hash string `json:"hash"`
-	Keys []Key  `json:"keys"`
+
+	Keys []Key `json:"keys"`
 }
 
 // VolatileAttrs 는 문서마다 달라도 "같은 양식"으로 보는 속성의 로컬명이다.

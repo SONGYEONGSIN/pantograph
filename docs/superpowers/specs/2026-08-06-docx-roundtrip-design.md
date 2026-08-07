@@ -37,6 +37,22 @@
 
 **단, 이 실측은 Python `zipfile`이 쓴 zip에 대한 것이다.** Word가 쓴 실제 docx는 ZIP64·data descriptor·extra field 구성이 다를 수 있어 구현 1단계에서 재검증한다 (§11).
 
+**보존되는 것은 엔트리의 *페이로드*지 *헤더*가 아니다.** raw 통과 뒤에도 `Package.Write`는 로컬·중앙 헤더를 `zip.FileHeader`로부터 다시 찍어내는데, `archive/zip`이 zip 헤더의 모든 것을 표현하지는 못한다. Info-ZIP이 쓴 zip으로 확인된 소실 두 가지:
+
+| 소실 | 증상 |
+|---|---|
+| 중앙 디렉토리의 internal file attributes (레코드 +36) | `zip.FileHeader`에 필드가 없어 writer가 항상 0을 쓴다. Info-ZIP은 텍스트 엔트리에 bit 0을 세운다 → 길이는 같고 1바이트가 달라진다 |
+| 로컬 헤더의 extra field | `zip.Reader`는 **중앙** 레코드의 것만 채우고 writer는 그 사본을 양쪽에 찍는다. Info-ZIP의 `UT` 타임스탬프 extra는 로컬 쪽이 더 길어서 **파일 길이 자체**가 달라진다 |
+
+이 때문에 I1을 "재조립 결과가 원본과 같다"에 기대면 안 된다. 대응은 두 겹이다:
+
+1. **빈 패치는 재조립하지 않는다.** 고친 파트가 하나도 없으면 `Write`가 원본 바이트를 그대로 흘려보낸다 — 항등 경로에서 헤더 재현 문제를 통째로 제거한다
+2. **열 때 재현 가능성을 검사한다.** `opc.Open`이 읽은 것을 즉시 되쓴 뒤 원본과 비교해, 다르면 `unsupported_container`로 **거절한다** (§9). 파트를 고치는 경로는 재조립을 피할 수 없으므로, 이 게이트가 "열린 파일은 재조립해도 안전하다"를 보장해 I2를 받쳐준다
+
+거절되는 실제 파일이 있을 수 있다. 그것이 의도다 — 폴백으로 근사하면 "안 건드린 것은 바이트 동일"이 조용히 거짓이 된다. 검증되지 않은 가정은 보증이 아니다.
+
+`TestIdentityGenerated`가 이 문제를 잡을 수 없었던 이유도 여기 있다: 픽스처 생성기가 `archive/zip` 자신이라, 헤더 축에서는 "Go의 zip writer가 Go의 zip writer가 쓴 것을 재현하는가"를 묻는 동어반복에 가깝다. `TestIdentityReal`이 필요한 이유다.
+
 ### 2.3 결론 — 바이트 오프셋 스플라이싱
 
 파싱은 **주소를 만들기 위해서만** 한다. 각 노드의 `(offset, length)`를 기록하고, 패치는 그 바이트 구간을 갈아끼우는 문자열 연산이다. XML 트리를 다시 직렬화하는 일은 한 번도 없다.
@@ -134,39 +150,55 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 {
   "doc": {
     "format": "docx",
-    "hash": "sha256:…",
+    "hash": "sha256:10c770bf…",
     "parts": ["[Content_Types].xml", "_rels/.rels", "word/document.xml", "…"],
     "scannedPart": "word/document.xml"
   },
   "nodes": [
-    { "path": "word/body[1]/p[1]", "type": "p", "span": [302, 443],
-      "attrs": [{"name":"w14:paraId","value":"12AB34CD"}] },
-    { "path": "word/body[1]/p[1]/r[1]/t[1]", "type": "t", "span": [396, 436],
-      "attrs": [{"name":"xml:space","value":"preserve"}], "text": "제목 " }
+    { "path": "word/body[1]/p[1]", "type": "p",
+      "span":  {"start": 301, "end": 383},
+      "inner": {"start": 328, "end": 377},
+      "attrs": [
+        {"name":"paraId", "ns":"http://schemas.microsoft.com/office/word/2010/wordml",
+         "value":"00000001"}
+      ] },
+    { "path": "word/body[1]/p[1]/r[1]/t[1]", "type": "t",
+      "span":  {"start": 333, "end": 371},
+      "inner": {"start": 359, "end": 365},
+      "attrs": [
+        {"name":"space", "ns":"http://www.w3.org/XML/1998/namespace", "value":"preserve"}
+      ],
+      "text": "제목" }
   ]
 }
 ```
 
 `doc.hash`는 **입력 파일 전체 바이트의 sha256**이다 (압축 해제 전, zip 컨테이너 그대로). 패치의 `hash`가 이 값과 대조된다 — 낙관적 잠금이 `word/document.xml`뿐 아니라 컨테이너 전체의 변경을 잡는다.
 
-`span`은 `scannedPart`의 압축 해제된 바이트 기준 `[start, end)`다. 다른 파트는 스캔하지 않으므로 노드가 없다.
+`span`은 `scannedPart`의 압축 해제된 바이트 기준 `[start, end)`이며 `{"start":…, "end":…}` 객체다. `inner`는 시작·종료 태그를 뺀 안쪽 구간으로, `setText`가 갈아끼우는 것이 바로 이 구간이다 (자기닫힘 요소는 폭 0). 다른 파트는 스캔하지 않으므로 노드가 없다.
+
+**속성은 접두사가 아니라 `{name, ns}` 쌍으로 낸다.** 접두사(`w14:`, `xml:`)는 문서마다 다르게 선언될 수 있어 안정적인 식별자가 아니다 — `ns`는 네임스페이스 URI이고, 네임스페이스가 없으면 생략된다. 네임스페이스 **선언** 자체(`xmlns:w=…`)도 `{"name":"w","ns":"xmlns"}` 형태의 속성으로 나온다는 점에 주의한다 — `encoding/xml`이 그것을 일반 속성으로 돌려주기 때문이다.
+
+`text`는 그 요소가 **직접** 품은 문자 데이터다. 자손의 텍스트는 포함하지 않으므로, 들여쓰기가 없는 `document.xml`에서 비단말 요소의 `text`는 비어 있다.
 
 ### apply
 
 ```
 1. 스캔 → 경로→Span 맵                   (dump과 같은 코드)
 2. hash 대조                             불일치 → 거부
-3. 모든 op 경로 해석                      하나라도 실패 → 아무것도 적용하지 않고 실패 목록
+3. 모든 op 경로 해석 + 경로 중복 검사      하나라도 실패 → 아무것도 적용하지 않고 실패 목록
 4. op → Splice 변환
 5. Span 겹침 검사                         겹치면 거부
-6. offset 내림차순으로 적용               ← 앞에서부터 하면 뒤 Span이 밀린다
-7. 결과를 다시 wml.Scan                   파싱 실패 → 롤백(출력 파일 미생성)
+6. offset 내림차순으로 지역 버퍼에 적용     ← 앞에서부터 하면 뒤 Span이 밀린다
+7. 결과를 다시 wml.Scan                   파싱 실패 → invalid_xml 거절 (출력 파일 미생성)
 8. opc.Replace → Write
 ```
 
 7번이 접근법의 대가를 치르는 지점이다 (§2.3).
 
-**op이 하나도 없는 패치(빈 패치)는 4번 이후 스플라이스가 없으므로 패키지를 건드리지 않고 그대로 반환한다.** 내용이 같아도 파트를 무조건 다시 쓰면 dirty 로 표시돼 `Package.Write`가 재압축을 하고, 재압축 결과가 원본과 바이트 단위로 같다는 보장이 없어 I1이 깨진다.
+**7번에서 되돌릴 것은 없다.** 스플라이스는 6번의 지역 버퍼에만 쌓이고 `opc.Replace`는 8번에서 처음 호출된다 — 트랜잭션을 연 적이 없으니 닫을 것도 없다. 실패는 열지 않은 것으로 끝난다. 롤백 기구가 있는 것처럼 쓰면 나중에 누가 없는 트랜잭션을 보정하는 코드를 더한다.
+
+**op이 하나도 없는 패치(빈 패치)는 4번 이후 스플라이스가 없으므로 패키지를 건드리지 않고 그대로 반환한다.** 내용이 같아도 파트를 무조건 다시 쓰면 dirty 로 표시돼 `Package.Write`가 재압축을 하고, 재압축 결과가 원본과 바이트 단위로 같다는 보장이 없어 I1이 깨진다. 그 위에 `Package.Write`가 "고친 파트가 없으면 원본 바이트를 그대로 쓴다"를 더해 I1을 컨테이너 층에서도 구조로 못박는다 (§2.2).
 
 ## 7. 패치 계약
 
@@ -240,8 +272,10 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 | 코드 | 뜻 |
 |---|---|
 | 0 | 성공 |
-| 1 | 입력 오류 — 경로 미해석 / hash 불일치 / Span 겹침 / setText 공백 거절 / 구조 불일치 |
-| 2 | 내부 오류 — 파일 손상 / I/O / 적용 후 재스캔 실패 |
+| 1 | 입력 오류 — 경로 미해석 / hash 불일치 / Span 겹침 / setText 공백 거절 / 구조 불일치 / 적용 후 재스캔 실패 / 재현 불가 컨테이너 |
+| 2 | 내부 오류 — 파일 손상 / I/O |
+
+**적용 후 재스캔 실패가 코드 1인 이유**: 결함은 전적으로 호출자가 준 `replaceRaw` XML에 있다. 종료 코드로 재시도 여부를 가르는 에이전트에게 코드 2는 "도구가 고장났으니 포기"를 뜻하므로, 호출자가 고칠 수 있는 실패를 거기로 보내면 안 된다. 이 실패도 다른 거절과 똑같이 stdout JSON + 경로를 단다 (`invalid_xml`).
 
 구현이 내는 `Reason` 전체 목록:
 
@@ -250,15 +284,20 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 | `hash_mismatch` | 낙관적 잠금 실패 — 덤프 이후 문서가 바뀌었다 | 1 |
 | `path_not_found` | 경로가 문서에 없다 | 1 |
 | `unknown_op` | 알 수 없는 연산 (setText \| replaceRaw) | 1 |
+| `duplicate_path` | 같은 경로를 가리키는 op 이 둘 이상이다 — 적용 순서가 정의되지 않는다 | 1 |
 | `overlap` | 두 패치의 바이트 구간이 겹친다 | 1 |
 | `type_mismatch` | setText 대상이 `w:t` 가 아니다 | 1 |
 | `whitespace_needs_preserve` | 앞뒤 공백을 넣으려는데 `xml:space="preserve"` 가 없다 | 1 |
 | `self_closing_target` | setText 대상이 자기닫힘 요소라 텍스트 자리가 없다 | 1 |
+| `invalid_xml` | 적용 결과가 well-formed XML 이 아니다. 원인이 된 op 의 경로를 단다 | 1 |
+| `unsupported_container` | zip 컨테이너를 바이트 동일하게 재조립할 수 없다 (§2.2) | 1 |
 | `too_few_documents` | 템플릿 역추출에 문서가 2벌 미만 | 1 |
 | `structure_mismatch` | 문서 간 경로 집합이 다르다 | 1 |
 | `nontext_diff` | 텍스트 외의 마크업이 문서마다 다르다 | 1 |
 | `missing_key` | 데이터에 스키마의 키가 없다 | 1 |
 | `template_drift` | 템플릿의 해당 경로에 기대한 자리표시자가 없다 | 1 |
+
+`duplicate_path`를 `overlap`과 따로 두는 이유: 겹침 검사는 구간 비교(`start < 앞의 end`)라 폭 0 구간(빈 `<w:t></w:t>`의 안쪽)을 잡지 못한다. 같은 경로 자체를 검증 단계에서 거절하면 원인이 정확히 드러나고, 정렬이 안정 정렬이 아니어서 생기는 순서 비결정성(I3)도 함께 닫힌다.
 
 `panto tmpl fill`은 키가 0개인 스키마를 입력 오류로 거절한다 — 빈 `keys` 배열을 그대로 두면 `missing_key`/`template_drift` 검사를 하나도 거치지 않고 `{{key}}` 자리표시자가 그대로 남은 템플릿을 "ok": true 로 내보내게 된다.
 
@@ -277,7 +316,7 @@ RED 먼저. 불변식을 테스트로 고정한다.
 | `TestOverlapRejected` | Span 겹침 거절 |
 | `TestHashMismatch` | 낙관적 잠금 거절 |
 | `TestWhitespaceRejected` | setText 공백 거절 |
-| `TestTemplateReversal` | I4a — 2벌 → extract → fill(values(D₁)) → D₁과 바이트 동일 |
+| `TestTemplateReversal` | I4a — 2벌 → extract → fill(values(D₁)) → D₁과 바이트 동일. 생성 픽스처(`…Base`)와 실제 문서(`…Real`) 둘 다 |
 | `TestTemplateTextEquality` | I4b — fill(values(D₂)) → D₂와 텍스트 노드 일치 |
 | `TestStructureMismatch` | 구조 다른 2벌 → 갈라진 경로를 정확히 지목 |
 
@@ -293,7 +332,7 @@ RED 먼저. 불변식을 테스트로 고정한다.
 
 머신 탐색 결과 사용 가능한 `.docx`가 없었다 (발견된 5개는 레거시 바이너리 `.doc`/CFB 포맷으로 범위 밖이며, 실제 고객사 문서라 픽스처로 쓰려면 별도 판단이 필요하다).
 
-현재까지 어떤 불변식도 실제 Word가 만든 `.docx`로 검증되지 않았다. `TestIdentityReal`(I1)과 `TestLocalityReal`(I2)은 픽스처가 없어 설계대로 FAIL한다. I4a 증명도 지금은 프로젝트 자체 픽스처 생성기(`internal/testutil/gen.go`)가 만든 문서에 대해서만 돈다 — §2.2가 지적한 ZIP64 · data descriptor · extra field 위험은 아직 검증되지 않은 채로 남아 있다.
+현재까지 어떤 불변식도 실제 Word가 만든 `.docx`로 검증되지 않았다. `TestIdentityReal`(I1) · `TestLocalityReal`(I2) · `TestTemplateReversalReal`(I4a) 셋 다 픽스처가 없어 설계대로 FAIL한다. I4a 증명은 지금 프로젝트 자체 픽스처 생성기(`internal/testutil/gen.go`)가 만든 문서에 대해서만 돌며, §13의 문자 참조 왕복 한계(`&amp;` vs `&#38;`)가 드러날 자리도 바로 거기다 — §2.2가 지적한 ZIP64 · data descriptor · extra field 위험과 함께 아직 검증되지 않은 채로 남아 있다.
 
 ## 11. 개발 순서
 

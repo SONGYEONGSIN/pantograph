@@ -130,9 +130,13 @@ func TestScanNodesArePreOrder(t *testing.T) {
 	}
 }
 
-func TestScanRejectsUnclosedElement(t *testing.T) {
+// TestScanRejectsMalformedXML 은 well-formed 가 아닌 입력이 거절되는지 본다.
+// 이 입력은 encoding/xml 디코더가 먼저 잡는다 (태그 짝이 어긋남) — Scan 의
+// "닫히지 않은 요소" 분기까지 가지 않는다. 이름이 그 분기를 검증한다고
+// 주장하지 않도록 일반적인 파싱 거절로 부른다.
+func TestScanRejectsMalformedXML(t *testing.T) {
 	_, err := wml.Scan([]byte(`<w:document xmlns:w="http://x"><w:body></w:document>`))
 	if err == nil {
-		t.Fatal("닫히지 않은 요소인데 에러가 없다")
+		t.Fatal("well-formed 가 아닌 XML 인데 에러가 없다")
 	}
 }

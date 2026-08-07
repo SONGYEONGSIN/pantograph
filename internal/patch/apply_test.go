@@ -228,14 +228,125 @@ func TestUnknownOpRejected(t *testing.T) {
 	}
 }
 
-func TestBrokenXMLIsInternalError(t *testing.T) {
-	p := open(t, testutil.MinimalDocx([]string{"제목"}))
-	_, err := patch.Apply(p, patch.Patch{
+// TestBrokenXMLIsInputError 는 재스캔 실패가 **입력 오류**로 보고되는지 본다.
+//
+// 결함은 전적으로 호출자가 준 XML 에 있다. 이것을 내부 오류(코드 2, stderr, 경로
+// 없음)로 내보내면 spec §9 를 세 군데 어기고, 종료 코드로 재시도 여부를 가르는
+// 에이전트를 "포기" 분기로 잘못 보낸다.
+func TestBrokenXMLIsInputError(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"제목", "본문"})
+	p := open(t, src)
+	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops:  []patch.Op{{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p><w:r>`}},
 	})
-	if err == nil {
-		t.Fatal("깨진 XML 을 넣었는데 에러가 없다")
+	if err != nil {
+		t.Fatalf("깨진 XML 이 내부 오류로 보고됐다: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
+		t.Fatalf("invalid_xml 로 거절되지 않았다: %+v", errs)
+	}
+	if errs[0].Path != "word/body[1]/p[1]" {
+		t.Fatalf("문제를 일으킨 op 의 경로를 달지 않았다: %+v", errs[0])
+	}
+	// 거절이면 문서는 손대지 않은 상태여야 한다.
+	got, err := p.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+	if !bytes.Equal(src, got) {
+		t.Fatal("거절된 패치인데 문서가 바뀌었다")
+	}
+}
+
+// TestBrokenXMLBlamesTheOffendingOp 는 유효한 op 여럿 사이에서 깨뜨린 op 을
+// 정확히 지목하는지 본다.
+func TestBrokenXMLBlamesTheOffendingOp(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "본문", "꼬리"}))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{
+			{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p><w:r><w:t>정상</w:t></w:r></w:p>`},
+			{Op: "replaceRaw", Path: "word/body[1]/p[2]", XML: `<w:p><w:r>`}, // 여기가 장본인
+			{Op: "replaceRaw", Path: "word/body[1]/p[3]", XML: `<w:p/>`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
+		t.Fatalf("invalid_xml 로 거절되지 않았다: %+v", errs)
+	}
+	if errs[0].Path != "word/body[1]/p[2]" {
+		t.Fatalf("장본인이 아닌 경로를 지목했다: %+v", errs[0])
+	}
+}
+
+// TestDuplicatePathRejectedOnEmptyTarget 는 F-I1 회귀 테스트다.
+//
+// 빈 <w:t></w:t> 의 안쪽 구간은 폭 0([p,p))이라 겹침 검사
+// (splices[i].start < splices[i-1].end)가 p < p 로 거짓이 된다. 두 op 이 모두
+// 게이트를 통과해 같은 지점에 스플라이스되면 텍스트가 조용히 이어붙는다.
+func TestDuplicatePathRejectedOnEmptyTarget(t *testing.T) {
+	p := open(t, testutil.DocxWithBody(`<w:p><w:r><w:t></w:t></w:r></w:p>`))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{
+			{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "AAA"},
+			{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "BBB"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "duplicate_path" {
+		t.Fatalf("같은 경로 중복이 거절되지 않았다: %+v", errs)
+	}
+	if errs[0].Path != "word/body[1]/p[1]/r[1]/t[1]" {
+		t.Fatalf("에러가 중복된 경로를 지목하지 않는다: %+v", errs[0])
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if bytes.Contains(content, []byte("AAABBB")) {
+		t.Fatalf("두 op 이 같은 지점에 이어붙었다: %s", content)
+	}
+}
+
+// TestDuplicatePathRejectedOnNonEmptyTarget 는 폭이 있는 대상에서도 겹침이 아니라
+// duplicate_path 로 거절되는지 본다 — 사유가 원인을 정확히 말해야 한다.
+func TestDuplicatePathRejectedOnNonEmptyTarget(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{
+			{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "AAA"},
+			{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "BBB"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "duplicate_path" {
+		t.Fatalf("같은 경로 중복이 거절되지 않았다: %+v", errs)
+	}
+}
+
+// TestSetTextRejectsSpaceAttrInOtherNamespace 는 xml:space 를 로컬명만으로
+// 판정하지 않는지 본다. 다른 네임스페이스의 space 속성은 xml:space 가 아니므로
+// 앞뒤 공백을 허용하는 근거가 될 수 없다.
+func TestSetTextRejectsSpaceAttrInOtherNamespace(t *testing.T) {
+	p := open(t, testutil.DocxWithBody(`<w:p><w:r><w:t w:space="preserve">제목</w:t></w:r></w:p>`))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "whitespace_needs_preserve" {
+		t.Fatalf("xml: 이 아닌 네임스페이스의 space 가 preserve 로 인정됐다: %+v", errs)
 	}
 }
 
