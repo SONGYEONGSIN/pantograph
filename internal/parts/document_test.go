@@ -1,6 +1,7 @@
 package parts_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -158,19 +159,42 @@ func TestDocumentSelect(t *testing.T) {
 	}
 }
 
-func TestDocumentLookup(t *testing.T) {
+// TestSelectRejectionReasons 는 선택자가 아무 파트도 못 고를 때의 사유가
+// patch.resolvePart 와 같은 세 갈래로 갈리는지 본다.
+//
+// Select 는 모든 실패를 한 문구로 뭉쳐 CLI 가 전부 part_not_found 로 냈다 —
+// 40 줄 옆의 patch.resolvePart 는 같은 입력 부류를 part_not_found /
+// ref_not_found / part_not_scannable 로 정확히 갈랐고 TestPartResolutionErrors
+// 가 셋을 고정하고 있었다. 같은 질문에 두 답이 나오지 않도록 판정은 이 패키지
+// 한 곳에만 둔다.
+func TestSelectRejectionReasons(t *testing.T) {
 	d, err := parts.Open(openReal(t, "deck-a.pptx"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	name := d.Parts()[0].Name
-	if _, ok := d.Lookup(name, "sld"); !ok {
-		t.Error("루트 노드 sld 를 못 찾았다")
+	cases := []struct{ sel, reason string }{
+		{"ppt/theme/theme1.xml", "part_not_scannable"}, // 컨테이너엔 있으나 본문 파트가 아니다
+		{"pptx/slide[99]", "ref_not_found"},            // 논리 참조 모양인데 안 풀린다
+		{"ppt/slides/slide99.xml", "part_not_found"},   // 물리 경로가 컨테이너에 없다
+		{"ppt/nope/*", "part_not_found"},               // 아무것도 못 고르는 glob
+		{"ppt/slides/[", "part_not_found"},             // glob 문법 오류 — 어차피 아무것도 못 고른다
 	}
-	if _, ok := d.Lookup(name, "없는/경로[1]"); ok {
-		t.Error("없는 경로가 찾아졌다")
-	}
-	if _, ok := d.Lookup("ppt/slides/slide99.xml", "sld"); ok {
-		t.Error("없는 파트에서 노드가 찾아졌다")
+	for _, c := range cases {
+		_, err := d.Select([]string{c.sel})
+		if err == nil {
+			t.Errorf("%s: 거절되지 않았다", c.sel)
+			continue
+		}
+		var se *parts.SelectError
+		if !errors.As(err, &se) {
+			t.Errorf("%s: *parts.SelectError 가 아니다: %v", c.sel, err)
+			continue
+		}
+		if se.Reason != c.reason {
+			t.Errorf("%s → Reason %q, want %q", c.sel, se.Reason, c.reason)
+		}
+		if !strings.Contains(se.Error(), c.sel) {
+			t.Errorf("%s: 오류가 선택자를 지목하지 않는다: %v", c.sel, se)
+		}
 	}
 }

@@ -303,6 +303,53 @@ func TestPathNotFoundHintOnBareRootDoesNotNameRootAlias(t *testing.T) {
 	}
 }
 
+// TestSetTextRejectionDetailsNameNoFormatElement 는 위 테스트와 같은 부류를
+// setText 의 세 거절 사유에 대해 고정한다.
+//
+// Detail 은 stdout JSON 으로 나가는 사용자 대면 문구다. `w:t` 는 Word 의 접두사이며
+// pptx 에서 같은 요소는 `a:t` 다 — 문구가 특정 포맷의 요소 이름을 박아넣으면
+// 슬라이드를 패치할 때마다 거짓을 말한다. setText 의 규칙은 "Word 의 w:t 여야
+// 한다"가 아니라 "지목된 노드가 텍스트 요소여야 한다"다.
+//
+// 정확한 문구가 아니라 "포맷 특정 요소 이름을 대지 않는다"는 실질만 고정한다.
+func TestSetTextRejectionDetailsNameNoFormatElement(t *testing.T) {
+	// t[1] 은 self-closing, t[2] 는 xml:space 없는 w:t, p[1] 은 텍스트 요소가 아니다
+	src := testutil.DocxWithBody(
+		`<w:p><w:r><w:t/></w:r><w:r><w:t>제목</w:t></w:r></w:p>`)
+
+	cases := []struct {
+		name, path, text, reason string
+	}{
+		{"type_mismatch", "document/body[1]/p[1]", "X", "type_mismatch"},
+		{"self_closing", "document/body[1]/p[1]/r[1]/t[1]", "X", "self_closing_target"},
+		{"whitespace", "document/body[1]/p[1]/r[2]/t[1]", " 공백 ", "whitespace_needs_preserve"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := open(t, src)
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: c.path, Text: c.text}},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != c.reason {
+				t.Fatalf("기대한 사유로 거절되지 않았다: %+v", errs)
+			}
+			detail := errs[0].Detail
+			if detail == "" {
+				t.Fatal("Detail 이 비어있다")
+			}
+			for _, lit := range []string{"w:t", "a:t"} {
+				if strings.Contains(detail, lit) {
+					t.Fatalf("Detail 이 포맷 특정 요소 이름을 박아넣었다: %q (%s 포함)", detail, lit)
+				}
+			}
+		})
+	}
+}
+
 func TestHashMismatchRejected(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{

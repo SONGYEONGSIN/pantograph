@@ -354,6 +354,115 @@ func TestTmplFillReportsUnsupportedMethodAsInputError(t *testing.T) {
 	assertUnsupportedReported(t, code, stdout, in)
 }
 
+// bodylessContainer 는 알려진 본문 파트가 하나도 없는 최소 OPC 컨테이너를 만든다.
+// 컨테이너 게이트(opc.Open)는 통과하고 parts.Plan 에서만 걸린다 — xlsx 를 넣는
+// 것이 이 부류의 대표 입력이다 (범위 밖 포맷, spec §1).
+func bodylessContainer(t *testing.T, path string) string {
+	t.Helper()
+	src := testutil.ZipOf(map[string]string{
+		"[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+			`<Default Extension="xml" ContentType="text/xml"/></Types>`,
+		"junk.xml": `<a/>`,
+	})
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	return path
+}
+
+// TestTmplExtractOnBodylessContainerIsInputError 는 본문 파트가 없는 컨테이너를
+// tmpl extract 에 주면 **입력 오류**(코드 1 + stdout JSON unsupported_format)로
+// 나오는지 본다.
+//
+// 사용자가 이 기능에서 가장 먼저 저지를 실수가 `panto tmpl extract a.xlsx b.xlsx`
+// 다. tmpl 은 parts.Open 의 오류를 맨 error 채널로 흘려보내고 fail() 이
+// *opc.UnsupportedError 만 알아봤기 때문에 코드 2(내부 오류)로 샜다 — 같은 오류를
+// dump 는 코드 1 로 낸다. 종료 코드로 재시도를 가르는 에이전트는 2 를 "도구가
+// 고장났으니 에스컬레이션"으로, 1 을 "입력이 틀렸으니 재시도 말 것"으로 읽는다
+// (spec §4·§8: unsupported_format 은 코드 1).
+func TestTmplExtractOnBodylessContainerIsInputError(t *testing.T) {
+	dir := t.TempDir()
+	a := bodylessContainer(t, filepath.Join(dir, "a.xlsx"))
+	b := bodylessContainer(t, filepath.Join(dir, "b.xlsx"))
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdTmplExtract([]string{a, b, "-o", filepath.Join(dir, "t.xlsx"),
+			"--schema", filepath.Join(dir, "schema.json")})
+	})
+	if code != exitInput {
+		t.Fatalf("본문 파트 없는 컨테이너인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "unsupported_format") {
+		t.Fatalf("stdout 에 unsupported_format 이 없다: %s", stdout)
+	}
+}
+
+// TestApplyOnBrokenPresentationIsInputError 는 unsupported_format 이 "본문 파트를
+// 못 찾았다" 한 경우만이 아님을 고정한다. Plan 의 **모든** 실패 —
+// [Content_Types].xml 없음, presentation.xml 파싱 실패, rId 미해석, 슬라이드가
+// 아닌 ContentType — 가 같은 부류이며 세 명령 모두 코드 1 로 낸다.
+//
+// 이 픽스처는 슬라이드 ContentType 은 선언하지만 presentation.xml 이 XML 로
+// 읽히지 않는다. 부류로 묶지 않으면 이 경로만 apply·tmpl 에서 코드 2 로 샌다.
+func TestApplyOnBrokenPresentationIsInputError(t *testing.T) {
+	dir := t.TempDir()
+	const slideCT = `application/vnd.openxmlformats-officedocument.presentationml.slide+xml`
+	src := testutil.ZipOf(map[string]string{
+		"[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+			`<Override PartName="/ppt/slides/slide1.xml" ContentType="` + slideCT + `"/></Types>`,
+		"ppt/presentation.xml":            `<p:presentation><이건 XML 이 아니다`,
+		"ppt/_rels/presentation.xml.rels": `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
+		"ppt/slides/slide1.xml":           `<p:sld/>`,
+	})
+	inPath := filepath.Join(dir, "in.pptx")
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	if err := os.WriteFile(patchPath, []byte(`{"ops":[]}`), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", filepath.Join(dir, "out.pptx")})
+	})
+	if code != exitInput {
+		t.Fatalf("presentation.xml 이 깨진 컨테이너인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "unsupported_format") {
+		t.Fatalf("stdout 에 unsupported_format 이 없다: %s", stdout)
+	}
+}
+
+// TestDumpSelectorReasonsMatchApply 는 --part 가 아무 파트도 못 고를 때의 사유가
+// apply 의 op.part 해석과 같은지 본다.
+//
+// patch.resolvePart 는 part_not_found / ref_not_found / part_not_scannable 을
+// 구분하는데 dump 의 Select 는 전부 하나로 뭉쳐 part_not_found 로 냈다 — 같은
+// 질문에 두 답이 나오면 에이전트가 어느 쪽을 믿어야 할지 알 수 없다.
+// 사유 판정은 한 곳(parts)에만 있어야 한다.
+func TestDumpSelectorReasonsMatchApply(t *testing.T) {
+	deck := filepath.Join("..", "..", "testdata", "real", "deck-a.pptx")
+	cases := []struct{ sel, reason string }{
+		{"ppt/theme/theme1.xml", "part_not_scannable"}, // 컨테이너엔 있으나 본문 파트가 아니다
+		{"pptx/slide[99]", "ref_not_found"},            // 논리 참조 모양인데 안 풀린다
+		{"ppt/nope/*", "part_not_found"},               // 아무것도 못 고르는 glob
+	}
+	for _, c := range cases {
+		var code int
+		stdout := captureStdout(t, func() { code = cmdDump([]string{deck, "--part", c.sel}) })
+		if code != exitInput {
+			t.Errorf("%s: exit=%d (기대 %d), stdout=%s", c.sel, code, exitInput, stdout)
+			continue
+		}
+		if !strings.Contains(stdout, c.reason) {
+			t.Errorf("%s: stdout 에 %s 가 없다: %s", c.sel, c.reason, stdout)
+		}
+	}
+}
+
 // TestApplyEmptyPatchIsByteIdentical 은 CLI 전 경로(파일 읽기 → Apply →
 // writeAtomic)를 지나도 빈 패치가 바이트 동일 산출을 내는지 본다 (I1).
 func TestApplyEmptyPatchIsByteIdentical(t *testing.T) {

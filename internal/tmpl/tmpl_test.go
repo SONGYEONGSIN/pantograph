@@ -3,6 +3,7 @@ package tmpl_test
 import (
 	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
@@ -269,6 +270,34 @@ func TestExtractRejectsIndentationDiff(t *testing.T) {
 	}
 	if len(errs) != 1 || errs[0].Reason != "nontext_diff" {
 		t.Fatalf("들여쓰기가 다른 문서가 거절되지 않았다 (거절이 기대 동작이다): %+v", errs)
+	}
+}
+
+// TestNontextDiffDetailNamesNoFormatElement 는 nontext_diff 문구가 특정 포맷의
+// 요소 이름을 박아넣지 않는지 본다 (patch 의 setText 거절 문구와 같은 부류).
+//
+// "w:t 밖의 텍스트가 다르다"는 pptx 를 비교할 때 거짓이다 — 슬라이드의 텍스트
+// 요소는 `a:t` 다. 이 검사의 규칙은 "Word 의 w:t 밖"이 아니라 "가변부로 다루지
+// 않는 요소의 직접 텍스트"이므로, 문구는 손에 든 노드의 Type 을 말해야 한다.
+func TestNontextDiffDetailNamesNoFormatElement(t *testing.T) {
+	a := fieldDoc(t, "MERGEFIELD Name", "홍길동")
+	b := fieldDoc(t, "MERGEFIELD Company", "김철수")
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "nontext_diff" {
+		t.Fatalf("기대한 사유로 거절되지 않았다: %+v", errs)
+	}
+	detail := errs[0].Detail
+	if detail == "" {
+		t.Fatal("Detail 이 비어있다")
+	}
+	for _, lit := range []string{"w:t", "a:t"} {
+		if strings.Contains(detail, lit) {
+			t.Fatalf("Detail 이 포맷 특정 요소 이름을 박아넣었다: %q (%s 포함)", detail, lit)
+		}
 	}
 }
 

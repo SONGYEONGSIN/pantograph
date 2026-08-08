@@ -59,6 +59,42 @@ func TestDumpIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestDumpOfRealFixturesIsDeterministic 은 I3 를 **실제 픽스처**로 검증한다.
+//
+// TestDumpIsDeterministic 은 합성 docx 만 돌고, TestPlanIsDeterministic 은 Plan
+// 만 반복한다 — 둘 다 "실제 Word·PowerPoint 문서로 I3 를 검증했다"는 README 의
+// 주장을 뒷받침하지 못했다. 결정성이 구조적으로 성립하더라도(전 필드가
+// 슬라이스·문자열이고 맵 순회가 개입하지 않는다) 주장과 테스트가 어긋나면
+// 그것이 이 프로젝트가 막으려는 실패 양식 그 자체다.
+//
+// Plan → Build → Marshal 전 경로를 매번 새 Document 로 두 번 돌려 바이트를 댄다 —
+// 파트 순서(pptx 는 슬라이드 3장)와 노드 순서가 모두 여기 걸린다.
+func TestDumpOfRealFixturesIsDeterministic(t *testing.T) {
+	for _, name := range []string{"form-a.docx", "deck-a.pptx"} {
+		t.Run(name, func(t *testing.T) {
+			run := func() []byte {
+				d, err := dump.Build(realDoc(t, name), nil)
+				if err != nil {
+					t.Fatalf("Build: %v", err)
+				}
+				b, err := dump.Marshal(d)
+				if err != nil {
+					t.Fatalf("Marshal: %v", err)
+				}
+				return b
+			}
+			a, b := run(), run()
+			if !bytes.Equal(a, b) {
+				t.Fatalf("I3 위반 — %s 를 두 번 덤프했는데 바이트가 다르다 (%d vs %d바이트)",
+					name, len(a), len(b))
+			}
+			if len(a) == 0 {
+				t.Fatal("덤프가 비었다 — 비교가 무의미하다")
+			}
+		})
+	}
+}
+
 func TestDumpDocxShape(t *testing.T) {
 	d, err := dump.Build(docOf(t, testutil.MinimalDocx([]string{"제목"})), nil)
 	if err != nil {

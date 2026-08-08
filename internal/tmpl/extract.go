@@ -189,8 +189,9 @@ func diffStructure(a, b *xmlscan.Tree, an, bn string) *patch.Error {
 	return nil
 }
 
-// diffMarkup 은 요소 자신의 마크업(타입 + 휘발성 제외 속성 + w:t 밖의 텍스트)이
-// 같은지 본다. 자손의 텍스트는 여기서 보지 않는다 — 그건 가변부 판별의 몫이다.
+// diffMarkup 은 요소 자신의 마크업(타입 + 휘발성 제외 속성 + 텍스트 요소가 아닌
+// 요소의 직접 텍스트)이 같은지 본다.
+// 자손의 텍스트는 여기서 보지 않는다 — 그건 가변부 판별의 몫이다.
 func diffMarkup(bn xmlscan.Node, trees []*xmlscan.Tree, idx int, names []string) *patch.Error {
 	baseAttrs := stableAttrs(bn)
 	for i := 1; i < len(trees); i++ {
@@ -202,9 +203,9 @@ func diffMarkup(bn xmlscan.Node, trees []*xmlscan.Tree, idx int, names []string)
 				Detail: fmt.Sprintf("%s 는 %s, %s 는 %s", names[0], bn.Type, names[i], other.Type),
 			}
 		}
-		// w:t 가 아닌 요소의 텍스트도 비교한다.
+		// 텍스트 요소(로컬명 t)가 아닌 요소의 텍스트도 비교한다.
 		//
-		// 가변부 판별은 w:t 만 본다. 여기서 걸러내지 않으면 w:instrText
+		// 가변부 판별은 로컬명 t 만 본다. 여기서 걸러내지 않으면 w:instrText
 		// (메일머지·페이지 번호·상호참조·TOC 를 Word 가 인코딩하는 요소) 같은
 		// 다른 요소의 텍스트 차이가 어느 쪽 검사에도 안 걸려 D₁ 의 것이 조용히
 		// 채택된다. 그러면 I4a 가 무의미해진다 (spec §8).
@@ -213,12 +214,14 @@ func diffMarkup(bn xmlscan.Node, trees []*xmlscan.Tree, idx int, names []string)
 		// 요소가 **직접** 품은 텍스트뿐이다. 비단말 요소에서는 요소 사이 공백이
 		// 그것인데, Word 는 document.xml 을 들여쓰기 없이 쓰므로 보통 빈 문자열이다.
 		// 들여쓰기가 서로 다른 문서는 여기서 거절된다 — 조용히 한쪽을 고르는 것보다 낫다.
+		// 문구는 포맷 특정 요소 이름을 대지 않는다 — 텍스트 요소는 docx 가 w:t,
+		// pptx 가 a:t 다. 대신 손에 든 노드의 Type 을 그대로 말한다.
 		if bn.Type != "t" && other.Text != bn.Text {
 			return &patch.Error{
 				Path:   bn.Path,
 				Reason: "nontext_diff",
-				Detail: fmt.Sprintf("w:t 밖의 텍스트가 다르다 (%s 는 %q, %s 는 %q)",
-					names[0], bn.Text, names[i], other.Text),
+				Detail: fmt.Sprintf("가변부로 다루지 않는 요소 %s 의 직접 텍스트가 다르다 (%s 는 %q, %s 는 %q)",
+					bn.Type, names[0], bn.Text, names[i], other.Text),
 			}
 		}
 		otherAttrs := stableAttrs(other)

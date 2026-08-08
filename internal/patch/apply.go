@@ -2,7 +2,6 @@ package patch
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -33,9 +32,11 @@ type pending struct {
 // Apply 는 패치를 적용한다. 파트가 여럿이어도 전부 적용되거나 전무다.
 //
 // 반환된 []Error 가 비어있지 않으면 패키지는 **손대지 않은 상태**다.
-// error 는 보통 내부 오류(종료 코드 2)이지만, *opc.UnsupportedError 일 수도 있다 —
-// 파트를 풀 때 미지원 압축 방식을 만나면 난다. CLI 는 이를 코드 1
-// (unsupported_container)로 매핑한다. 어느 경우든 패키지는 수정되지 않는다.
+// error 는 보통 내부 오류(종료 코드 2)이지만, 입력 부류일 수도 있다 —
+// *opc.UnsupportedError(파트를 풀 때 만난 미지원 압축 방식)와
+// parts.ErrUnsupportedFormat(Plan 의 모든 실패)이 그렇다. 그 둘을 reason 으로
+// 옮기는 것은 CLI 의 분류기 한 곳이 맡는다 — 여기서 따로 매핑하면 같은 오류에
+// 두 표가 생긴다. 어느 경우든 패키지는 수정되지 않는다.
 func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	if pt.Hash != "" && pt.Hash != p.Hash {
 		return []Error{{Reason: "hash_mismatch",
@@ -44,9 +45,6 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 
 	doc, err := parts.Open(p)
 	if err != nil {
-		if errors.Is(err, parts.ErrUnsupportedFormat) {
-			return []Error{{Reason: "unsupported_format", Detail: err.Error()}}, nil
-		}
 		return nil, err
 	}
 
@@ -117,6 +115,10 @@ func resolveAndBuffer(doc *parts.Document, ops []Op) ([]pending, []Error, error)
 
 // resolvePart 는 op 의 Part 를 물리 파트명으로 푼다.
 // 에러가 파트와 경로 중 어디서 났는지 구분해서 말한다 — 에이전트의 재시도에 필요하다.
+//
+// 못 푼 선택자의 세 갈래 판정(part_not_found / ref_not_found / part_not_scannable)은
+// parts.Document.Reject 가 맡는다 — dump 의 `--part` 가 같은 판정을 쓰므로 같은
+// 입력에 두 답이 나오지 않는다.
 func resolvePart(doc *parts.Document, op Op) (string, *Error) {
 	if op.Part == "" {
 		ps := doc.Parts()
@@ -129,22 +131,8 @@ func resolvePart(doc *parts.Document, op Op) (string, *Error) {
 	if name, ok := doc.Resolve(op.Part); ok {
 		return name, nil
 	}
-	// 논리 참조 모양인가로 사유를 가른다
-	if isRefShaped(op.Part) {
-		return "", &Error{Path: op.Path, Reason: "ref_not_found",
-			Detail: fmt.Sprintf("논리 참조 %q 가 풀리지 않는다", op.Part)}
-	}
-	if doc.Exists(op.Part) {
-		return "", &Error{Path: op.Path, Reason: "part_not_scannable",
-			Detail: fmt.Sprintf("%s 는 컨테이너에 있으나 스캔 대상이 아니다", op.Part)}
-	}
-	return "", &Error{Path: op.Path, Reason: "part_not_found",
-		Detail: fmt.Sprintf("파트 %q 가 문서에 없다", op.Part)}
-}
-
-// isRefShaped 는 선택자가 논리 참조 모양인지 본다 ("pptx/slide[3]", "docx/document").
-func isRefShaped(s string) bool {
-	return strings.HasPrefix(s, "pptx/") || strings.HasPrefix(s, "docx/")
+	se := doc.Reject(op.Part)
+	return "", &Error{Path: op.Path, Reason: se.Reason, Detail: se.Detail}
 }
 
 // spliceOne 은 파트 하나에 그 파트의 op 들을 적용해 스플라이스된 버퍼를 낸다.
@@ -186,22 +174,26 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 		case "replaceRaw":
 			splices = append(splices, splice{span: n.Span, repl: []byte(op.XML), path: op.Path})
 		case "setText":
+			// 거절 문구는 포맷 특정 요소 이름을 대지 않는다 — 같은 텍스트 요소가
+			// docx 에서는 w:t, pptx 에서는 a:t 다. setText 의 규칙은 "Word 의
+			// w:t 여야 한다"가 아니라 "지목된 노드가 텍스트 요소(로컬명 t)여야
+			// 한다"이며, 구체 예가 필요한 자리에는 손에 든 노드의 Type 을 쓴다.
 			if n.Type != "t" {
 				errs = append(errs, Error{
 					Path:   op.Path,
 					Reason: "type_mismatch",
-					Detail: fmt.Sprintf("setText 는 w:t 에만 쓸 수 있다 (대상 타입: %s)", n.Type),
+					Detail: fmt.Sprintf("setText 는 텍스트 요소(로컬명 t)에만 쓸 수 있다 (대상 타입: %s)", n.Type),
 				})
 				continue
 			}
-			// self-closing <w:t/> 는 시작/종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다.
+			// self-closing 텍스트 요소는 시작/종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다.
 			// xmlscan.Scan 은 이때 Inner 를 요소 바로 뒤의 폭 0 위치로 준다 — 여기 스플라이스하면
-			// 텍스트가 w:t 밖(형제 위치)에 삽입돼 well-formed 지만 의미가 깨진다.
+			// 텍스트가 요소 밖(형제 위치)에 삽입돼 well-formed 지만 의미가 깨진다.
 			if n.Inner.Start >= n.Span.End {
 				errs = append(errs, Error{
 					Path:   op.Path,
 					Reason: "self_closing_target",
-					Detail: "대상 w:t 가 self-closing 이라 텍스트를 넣을 위치가 없다. replaceRaw 를 쓸 것",
+					Detail: fmt.Sprintf("대상 %s 가 self-closing 이라 텍스트를 넣을 위치가 없다. replaceRaw 를 쓸 것", n.Type),
 				})
 				continue
 			}
@@ -214,7 +206,7 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 					errs = append(errs, Error{
 						Path:   op.Path,
 						Reason: "whitespace_needs_preserve",
-						Detail: `대상 w:t 에 xml:space="preserve" 가 없어 앞뒤 공백을 넣을 수 없다. replaceRaw 를 쓸 것`,
+						Detail: fmt.Sprintf(`대상 %s 에 xml:space="preserve" 가 없어 앞뒤 공백을 넣을 수 없다. replaceRaw 를 쓸 것`, n.Type),
 					})
 					continue
 				}

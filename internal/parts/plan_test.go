@@ -1,6 +1,7 @@
 package parts_test
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -74,7 +75,6 @@ func TestPlanOrdersSlidesByPresentation(t *testing.T) {
 // 둘을 일부러 어긋나게 만든 합성 컨테이너로 그 구멍을 막는다 — sldIdLst 가
 // slide3 → slide1 → slide2 순서를 가리키게 하고, 실제로 그 순서로 나오는지 본다.
 func TestPlanUsesSldIdOrderNotFileOrder(t *testing.T) {
-	const slideCT = `application/vnd.openxmlformats-officedocument.presentationml.slide+xml`
 	src := testutil.ZipOf(map[string]string{
 		"[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
 			`<Override PartName="/ppt/slides/slide1.xml" ContentType="` + slideCT + `"/>` +
@@ -129,6 +129,89 @@ func TestPlanUsesSldIdOrderNotFileOrder(t *testing.T) {
 		if ps[i].Root != "sld" {
 			t.Errorf("ps[%d].Root = %q, want sld", i, ps[i].Root)
 		}
+	}
+}
+
+// slideCT 는 슬라이드 파트의 ContentType 이다.
+const slideCT = `application/vnd.openxmlformats-officedocument.presentationml.slide+xml`
+
+// pptxOf 는 sldIdLst·rels·엔트리를 직접 지정해 최소 pptx 컨테이너를 만든다.
+// Plan 의 거절 경로 시험용이다.
+func pptxOf(overrides, sldIds, rels string, entries map[string]string) []byte {
+	all := map[string]string{
+		"[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+			overrides + `</Types>`,
+		"ppt/presentation.xml": `<?xml version="1.0"?>` +
+			`<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" ` +
+			`xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+			`<p:sldIdLst>` + sldIds + `</p:sldIdLst></p:presentation>`,
+		"ppt/_rels/presentation.xml.rels": `<?xml version="1.0"?>` +
+			`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+			rels + `</Relationships>`,
+	}
+	for n, c := range entries {
+		all[n] = c
+	}
+	return testutil.ZipOf(all)
+}
+
+// TestPlanRejectsDuplicateSlideTarget 는 같은 슬라이드를 두 번 가리키는
+// sldIdLst 를 거절하는지 본다.
+//
+// Plan 은 공격자가 고른 XML 을 무한한 작업량으로 바꿀 수 있는 유일한 지점이다.
+// sldId 마다 계획 항목을 하나씩 붙이면서 이름 중복을 안 봤기 때문에, 같은 rId
+// 를 N 번 쓰거나 두 rId 가 같은 Target 을 가리키면 계획이 N 배로 부푼다 —
+// Document.Open 의 맵은 중복을 접지만 d.plan 은 N 개를 그대로 들고 있고,
+// Select(nil) 이 N 개를 돌려주고, dump.Build 가 **같은 노드 슬라이스**를 N 번
+// 담아 Marshal 이 N 번 직렬화한다. 2KB 짜리 presentation.xml 이 수백 MB 의
+// stdout 이 된다. 거절이므로 폴백 금지 규칙과도 맞는다.
+func TestPlanRejectsDuplicateSlideTarget(t *testing.T) {
+	src := pptxOf(
+		`<Override PartName="/ppt/slides/slide1.xml" ContentType="`+slideCT+`"/>`,
+		`<p:sldId id="1" r:id="rId1"/><p:sldId id="2" r:id="rId2"/>`,
+		// 서로 다른 rId 두 개가 같은 파트를 가리킨다
+		`<Relationship Id="rId1" Target="slides/slide1.xml"/>`+
+			`<Relationship Id="rId2" Target="slides/slide1.xml"/>`,
+		map[string]string{"ppt/slides/slide1.xml": `<p:sld/>`})
+
+	p, err := opc.OpenBytes(src)
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	_, ps, err := parts.Plan(p)
+	if err == nil {
+		t.Fatalf("같은 슬라이드를 두 번 가리키는 sldIdLst 가 거절되지 않았다 — 계획이 %d개다: %+v", len(ps), ps)
+	}
+	if !errors.Is(err, parts.ErrUnsupportedFormat) {
+		t.Errorf("거절이 unsupported_format 부류가 아니다: %v", err)
+	}
+}
+
+// TestPlanRejectsSlideMissingFromContainer 는 컨테이너에 없는 파트를 가리키는
+// sldId 를 거절하는지 본다.
+//
+// [Content_Types].xml 도 공격자가 고른 입력이므로 "슬라이드 ContentType 이다"는
+// 그 파트가 실제로 있다는 근거가 못 된다. 없는 파트를 계획에 넣으면 첫
+// doc.Tree 에서야 실패하는데, 그때는 이미 N 항목 계획이 만들어진 뒤다.
+func TestPlanRejectsSlideMissingFromContainer(t *testing.T) {
+	src := pptxOf(
+		// slide1 은 컨테이너에 있고(hasSlide 성립), slide9 는 선언만 있다
+		`<Override PartName="/ppt/slides/slide1.xml" ContentType="`+slideCT+`"/>`+
+			`<Override PartName="/ppt/slides/slide9.xml" ContentType="`+slideCT+`"/>`,
+		`<p:sldId id="1" r:id="rId1"/>`,
+		`<Relationship Id="rId1" Target="slides/slide9.xml"/>`,
+		map[string]string{"ppt/slides/slide1.xml": `<p:sld/>`})
+
+	p, err := opc.OpenBytes(src)
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	_, ps, err := parts.Plan(p)
+	if err == nil {
+		t.Fatalf("컨테이너에 없는 파트가 계획에 들어갔다: %+v", ps)
+	}
+	if !errors.Is(err, parts.ErrUnsupportedFormat) {
+		t.Errorf("거절이 unsupported_format 부류가 아니다: %v", err)
 	}
 }
 

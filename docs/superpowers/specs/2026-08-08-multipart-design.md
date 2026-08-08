@@ -115,13 +115,15 @@ func Plan(p *opc.Package) (format string, parts []Part, err error)
 | `…presentationml.slide+xml` | ✅ | `pptx/slide[N]` |
 | 그 외 (theme·master·layout·styles·rels) | ❌ | — |
 
-**기본은 본문 파트만 스캔한다.** 마스터·레이아웃까지 넣으면 빈 3 장 덱도 노드가 수백 개다(§11 실측). `--part` 로 명시하면 스캔한다 — 물리 주소가 있으니 닿을 수 있다.
+**본문 파트만 스캔한다.** 마스터·레이아웃까지 넣으면 빈 3 장 덱도 노드가 수백 개다(§11 실측). `--part` 는 **그 본문 파트 집합을 좁히는** 선택자다 — 계획에 없는 파트를 명시해도 스캔하지 않고 `part_not_scannable` 로 거절한다. 계획 밖 파트를 명시로 끌어들이는 것은 이 슬라이스의 범위가 아니다(§12).
 
 **슬라이드 순서는 `presentation.xml` 이 정한다.** 파일명이 아니다. §11 의 실측에서는 PowerPoint 가 매 저장마다 정규화해 두 경우 모두 파일명과 순서가 일치했으나, 그렇다고 파일명을 믿을 이유는 없다 — 논리 참조를 제공하려면 어차피 그 파일을 읽어야 하고, 파일명 순서를 가정하면 어긋났을 때 알아낼 방법이 없다. 생산자를 하나만 관측했다는 한계도 선행 슬라이스와 같다.
 
 `Plan` 의 출력 순서는 결정론적이어야 한다 (I3). pptx 는 `sldIdLst` 순서, docx 는 본문 파트 하나뿐이다.
 
-`Plan` 이 알려진 본문 파트를 하나도 못 찾으면 에러를 반환하고, CLI 는 그것을 **stdout JSON + 종료 코드 1**(`unsupported_format`)로 낸다 — `unsupported_container` 와 같은 취급이다. 입력 파일의 성질이지 도구의 고장이 아니다.
+`Plan` 의 **모든** 실패는 한 부류다 — 알려진 본문 파트가 없는 것, `[Content_Types].xml` 이 없거나 안 읽히는 것, `presentation.xml` 이 파싱되지 않는 것, `sldId` 의 rId 가 rels 에 없는 것, 슬라이드가 아닌 ContentType 을 가리키는 것 전부. 셋 다 `parts.ErrUnsupportedFormat` 을 `%w` 로 감싸고, CLI 는 **stdout JSON + 종료 코드 1**(`unsupported_format`)로 낸다 — `unsupported_container` 와 같은 취급이다. 입력 파일의 성질이지 도구의 고장이 아니다. 부류가 하나여야 `dump`·`apply`·`tmpl` 이 같은 파일에 같은 코드를 낸다.
+
+**`Plan` 은 신뢰 경계다.** `presentation.xml`·rels·`[Content_Types].xml` 은 모두 입력 파일이 정하므로, "슬라이드로 선언됐다"는 그 파트가 실제로 있다는 근거도 한 번만 나온다는 근거도 못 된다. 계획은 `sldId` 하나당 항목 하나를 만들기 때문에, 검사 없이 통과시키면 이 함수가 입력 XML 을 작업량 배수로 바꾼다 — 같은 슬라이드를 N 번 가리키는 작은 `presentation.xml` 하나가 수백 MB 짜리 덤프가 된다(같은 노드 슬라이스를 N 번 직렬화). 그래서 `orderSlides` 는 **이름 중복**과 **컨테이너에 없는 파트**를 거절한다. 둘 다 거절이므로 폴백 금지 규칙과 맞는다.
 
 ### 조회 표면
 
@@ -207,9 +209,13 @@ hash 잠금은 파일 전체 sha256 이라 어느 파트가 바뀌었든 잡는�
 | `part_not_found` | 물리 파트가 문서에 없다 | 1 |
 | `ref_not_found` | 논리 참조가 안 풀린다 (`pptx/slide[99]`) | 1 |
 | `part_not_scannable` | 스캔 대상이 아닌 파트를 경로로 가리켰다 | 1 |
-| `unsupported_format` | Content_Types 에서 알려진 본문 파트를 못 찾았다 | 1 |
+| `unsupported_format` | `Plan` 이 실패했다 — 알려진 본문 파트 없음, Content_Types·presentation.xml 파싱 실패, sldId 의 rId 미해석, 중복·부재 슬라이드 | 1 |
 
 기존 `path_not_found` 는 "파트는 찾았는데 그 안에 경로가 없다" 로 좁혀진다. **에러가 파트와 경로 중 어디서 틀렸는지 구분해서 말한다** — 에이전트가 재시도할 때 필요한 정보다.
+
+**부류→(reason, 코드) 매핑은 CLI 에 한 곳만 둔다** (`cmd/panto/main.go` 의 `classify`). 명령마다 따로 매핑하면 같은 파일이 `dump` 에서는 코드 1, `tmpl` 에서는 코드 2 로 나간다. 마찬가지로 못 푼 선택자의 세 갈래 판정은 `parts.Document.Reject` 한 곳에만 둔다.
+
+**거절 문구(`Error.Detail`)는 포맷 특정 요소 이름을 대지 않는다.** 텍스트 요소는 docx 가 `w:t`, pptx 가 `a:t` 다 — 문구에 한쪽을 박아넣으면 다른 포맷을 다룰 때마다 거짓을 말한다. 규칙을 말하고, 구체 예가 필요하면 손에 든 노드의 `Type`(로컬명)을 쓴다.
 
 선행 슬라이스의 15 개 Reason 은 그대로 유지된다.
 
@@ -222,17 +228,16 @@ panto tmpl extract <a> <b> [...] -o tmpl --schema schema.json
 panto tmpl fill    <tmpl> --schema schema.json -d data.json -o out
 ```
 
-`--part` 선택자는 물리 경로 glob 또는 논리 참조를 받는다.
+`--part` 선택자는 물리 경로 glob 또는 논리 참조를 받으며, **`Plan` 이 고른 본문 파트 안에서만** 고른다.
 
 ```
 --part 'ppt/slides/*'        물리 경로 glob
 --part 'pptx/slide[3]'       논리 참조 — 정확 일치
---part 'ppt/slideMasters/*'  기본 제외 파트도 명시하면 스캔
 ```
 
 **판정 순서**: 먼저 논리 참조로 정확 일치를 시도하고, 없으면 물리 경로 glob 으로 본다. `[` 를 포함하는 논리 참조가 glob 의 문자 클래스로 오독되지 않도록 이 순서가 필요하다.
 
-`--part` 는 여러 번 줄 수 있고 합집합이다. 어느 선택자도 파트를 하나도 못 고르면 **거부한다**(`part_not_found`) — 조용히 빈 덤프를 내면 사용자가 오타를 눈치채지 못한다.
+`--part` 는 여러 번 줄 수 있고 합집합이다. 어느 선택자도 파트를 하나도 못 고르면 **거부한다** — 조용히 빈 덤프를 내면 사용자가 오타를 눈치채지 못한다. 거절 사유는 `apply` 의 `op.part` 해석과 같은 세 갈래(`part_not_found` / `ref_not_found` / `part_not_scannable`)이며, 판정은 `parts.Document.Reject` 한 곳에만 있다 — 같은 선택자에 두 명령이 다른 답을 내면 에이전트가 어느 쪽을 믿어야 할지 알 수 없다. 계획에 없는 파트(`ppt/theme/theme1.xml`, `ppt/slideMasters/*`)를 명시하면 `part_not_scannable` 이다.
 
 인자가 없으면 `Plan` 이 고른 본문 파트를 전부 덤프한다. docx 는 지금과 동작이 같다.
 
@@ -285,6 +290,7 @@ pptx 픽스처를 만들며 확인한 것. 설계의 근거이므로 남긴다.
 
 - **xlsx** — 시트가 파트로 쪼개지는 것은 같으나, 셀 텍스트가 시트에 없고 `xl/sharedStrings.xml` 에 모여 인덱스로 참조된다. 텍스트 하나를 바꾸려면 두 파트를 함께 봐야 하고, 그것은 이 슬라이스의 "노드는 파트 하나에 속한다" 전제를 건드린다. 별도 슬라이스
 - **노드 수준 논리 선택자** — `shape[title]` / `shape[@name='로고']` (§3)
+- **본문 파트 밖 스캔** — `--part` 로 마스터·레이아웃·테마를 명시해도 스캔하지 않는다(`part_not_scannable`). `Select` 는 계획을 좁히기만 하므로, 계획 밖 파트를 끌어들이려면 계획 자체가 선택자를 받아야 한다 — `Plan` 의 책임 범위가 달라지는 변경이라 별도 슬라이스
 - **슬라이드 추가·삭제·재정렬** — `presentation.xml` 과 rels 를 함께 고쳐야 하고, 이는 제자리 변경이 아니다. 선행 슬라이스가 `insert`/`delete` 를 뺀 것과 같은 이유
 - **문자 참조 인코딩 왕복** — 선행 슬라이스의 한계가 그대로 남는다. pptx 픽스처로도 아직 안 건드려졌다
 - **다른 pptx 생산자** — 파일명·순서 정규화와 컨테이너 재현 가능 여부 모두 PowerPoint 16.x 만 관측했다

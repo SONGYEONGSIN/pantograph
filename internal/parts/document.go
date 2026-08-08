@@ -3,6 +3,7 @@ package parts
 import (
 	"fmt"
 	"path"
+	"strings"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
@@ -89,14 +90,6 @@ func (d *Document) Loaded() []string {
 	return out
 }
 
-func (d *Document) Lookup(name, nodePath string) (xmlscan.Node, bool) {
-	t, err := d.Tree(name)
-	if err != nil {
-		return xmlscan.Node{}, false
-	}
-	return t.Lookup(nodePath)
-}
-
 // Exists 는 파트가 컨테이너에 있는지 본다 (스캔 대상 여부와 무관하다).
 func (d *Document) Exists(name string) bool {
 	for _, n := range d.pkg.Names() {
@@ -118,6 +111,45 @@ func (d *Document) Resolve(sel string) (string, bool) {
 		return pt.Name, true
 	}
 	return "", false
+}
+
+// SelectError 는 선택자가 파트를 하나도 못 골랐을 때의 이유다.
+// Reason 은 spec §8 의 어휘 그대로이며 CLI 가 그대로 stdout JSON 에 싣는다.
+type SelectError struct {
+	Sel    string // 문제의 선택자
+	Reason string // part_not_found | ref_not_found | part_not_scannable
+	Detail string
+}
+
+func (e *SelectError) Error() string { return e.Detail }
+
+// Reject 는 못 푼 선택자의 실패 사유를 가른다.
+//
+// dump 의 `--part` 와 patch 의 `op.part` 는 같은 질문을 한다 — 이 선택자가
+// 어느 파트인가. 판정이 두 곳에 있으면 같은 입력에 두 답이 나온다
+// (`ppt/theme/theme1.xml` 이 한쪽에서는 "아무것도 못 골랐다", 다른 쪽에서는
+// "컨테이너에 있으나 스캔 대상이 아니다"). 그래서 세 갈래 판정은 여기 한 곳에만 둔다.
+//
+// 논리 참조 모양인지를 먼저 본다 — 그 모양이면 물리 파트로 존재할 수 없으므로
+// 존재 여부를 묻는 것 자체가 무의미하다.
+func (d *Document) Reject(sel string) *SelectError {
+	switch {
+	case isRefShaped(sel):
+		return &SelectError{Sel: sel, Reason: "ref_not_found",
+			Detail: fmt.Sprintf("논리 참조 %q 가 풀리지 않는다", sel)}
+	case d.Exists(sel):
+		return &SelectError{Sel: sel, Reason: "part_not_scannable",
+			Detail: fmt.Sprintf("%s 는 컨테이너에 있으나 스캔 대상이 아니다", sel)}
+	default:
+		return &SelectError{Sel: sel, Reason: "part_not_found",
+			Detail: fmt.Sprintf("선택자 %q 가 가리키는 파트가 문서에 없다", sel)}
+	}
+}
+
+// isRefShaped 는 선택자가 논리 참조 모양인지 본다 ("pptx/slide[3]", "docx/document").
+// 접두사가 포맷 이름이므로 포맷을 아는 이 패키지에 있어야 한다.
+func isRefShaped(s string) bool {
+	return strings.HasPrefix(s, "pptx/") || strings.HasPrefix(s, "docx/")
 }
 
 // Select 는 --part 선택자들을 계획의 부분집합으로 푼다.
@@ -143,7 +175,11 @@ func (d *Document) Select(sels []string) ([]Part, error) {
 			for _, pt := range d.plan {
 				ok, err := path.Match(sel, pt.Name)
 				if err != nil {
-					return nil, fmt.Errorf("선택자 %q 가 올바른 glob 이 아니다: %w", sel, err)
+					// glob 문법 오류는 어떤 파트도 고를 수 없다는 뜻이라 사유는
+					// 다른 실패와 같은 세 갈래를 지난다. 문법 오류라는 사실만 덧붙인다.
+					se := d.Reject(sel)
+					se.Detail += fmt.Sprintf(" (glob 문법 오류: %v)", err)
+					return nil, se
 				}
 				if ok {
 					picked[pt.Name] = true
@@ -153,7 +189,7 @@ func (d *Document) Select(sels []string) ([]Part, error) {
 		}
 
 		if !matched {
-			return nil, fmt.Errorf("선택자 %q 가 아무 파트도 고르지 못했다", sel)
+			return nil, d.Reject(sel)
 		}
 	}
 
