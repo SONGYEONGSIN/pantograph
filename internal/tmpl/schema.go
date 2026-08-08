@@ -8,6 +8,7 @@ package tmpl
 // Key 는 템플릿의 가변 자리 하나다.
 type Key struct {
 	Key     string   `json:"key"`
+	Part    string   `json:"part"`
 	Path    string   `json:"path"`
 	Samples []string `json:"samples"`
 }

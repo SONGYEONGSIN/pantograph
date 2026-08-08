@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/SONGYEONGSIN/pantograph/internal/dump"
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
+	"github.com/SONGYEONGSIN/pantograph/internal/parts"
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
 	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
@@ -17,7 +17,7 @@ import (
 func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patch.Error, error) {
 	if len(pkgs) < 2 {
 		return nil, nil, []patch.Error{{
-			Path:   dump.ScannedPart,
+			Path:   firstPartName(pkgs),
 			Reason: "too_few_documents",
 			Detail: fmt.Sprintf("문서 %d벌 — 가변부를 판별하려면 2벌 이상이 필요하다", len(pkgs)),
 		}}, nil
@@ -26,55 +26,73 @@ func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patc
 		return nil, nil, nil, fmt.Errorf("문서 %d개에 이름 %d개", len(pkgs), len(names))
 	}
 
-	trees := make([]*xmlscan.Tree, len(pkgs))
+	docs := make([]*parts.Document, len(pkgs))
 	for i, p := range pkgs {
-		content, err := p.Part(dump.ScannedPart)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		tr, err := xmlscan.Scan(content, "document")
+		d, err := parts.Open(p)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("%s: %w", names[i], err)
 		}
-		trees[i] = tr
+		docs[i] = d
 	}
 
-	base := trees[0]
+	base := docs[0]
+	basePlan := base.Parts()
 
-	// 1) 구조 정렬 — 경로 집합이 완전히 일치해야 한다
-	for i := 1; i < len(trees); i++ {
-		if e := diffStructure(base, trees[i], names[0], names[i]); e != nil {
+	// 1) 파트 집합 비교 — 계획의 (Name, Ref, Root) 열이 완전히 일치해야 한다.
+	//    노드 비교는 파트가 대응된다는 전제 위에서만 의미가 있으므로 이걸 먼저 본다.
+	for i := 1; i < len(docs); i++ {
+		if e := diffPartSet(basePlan, docs[i].Parts(), names[0], names[i]); e != nil {
 			return nil, nil, []patch.Error{*e}, nil
 		}
 	}
 
-	// 2) 노드별 비교 — 경로가 같으므로 인덱스가 정렬돼 있다
+	// 2) 파트별로 구조 정렬 → diffMarkup → 가변부 판별.
+	//    키 번호는 파트를 가로질러 이어진다 — 스키마의 데이터 파일이
+	//    {"k1": ..., "k2": ...} 형태의 평평한 맵이라 파트별로 번호가 겹치면 충돌한다.
 	var keys []Key
 	var ops []patch.Op
-	for idx, bn := range base.Nodes {
-		if e := diffMarkup(bn, trees, idx, names); e != nil {
-			return nil, nil, []patch.Error{*e}, nil
+	for _, pt := range basePlan {
+		trees := make([]*xmlscan.Tree, len(docs))
+		for i, d := range docs {
+			tr, err := d.Tree(pt.Name)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("%s: %w", names[i], err)
+			}
+			trees[i] = tr
 		}
-		if bn.Type != "t" {
-			continue
-		}
-		varies := false
+		baseTree := trees[0]
+
 		for i := 1; i < len(trees); i++ {
-			if trees[i].Nodes[idx].Text != bn.Text {
-				varies = true
-				break
+			if e := diffStructure(baseTree, trees[i], names[0], names[i]); e != nil {
+				return nil, nil, []patch.Error{*e}, nil
 			}
 		}
-		if !varies {
-			continue
+
+		for idx, bn := range baseTree.Nodes {
+			if e := diffMarkup(bn, trees, idx, names); e != nil {
+				return nil, nil, []patch.Error{*e}, nil
+			}
+			if bn.Type != "t" {
+				continue
+			}
+			varies := false
+			for i := 1; i < len(trees); i++ {
+				if trees[i].Nodes[idx].Text != bn.Text {
+					varies = true
+					break
+				}
+			}
+			if !varies {
+				continue
+			}
+			key := "k" + strconv.Itoa(len(keys)+1)
+			samples := make([]string, len(trees))
+			for i := range trees {
+				samples[i] = trees[i].Nodes[idx].Text
+			}
+			keys = append(keys, Key{Key: key, Part: pt.Name, Path: bn.Path, Samples: samples})
+			ops = append(ops, patch.Op{Op: "setText", Part: pt.Name, Path: bn.Path, Text: "{{" + key + "}}"})
 		}
-		key := "k" + strconv.Itoa(len(keys)+1)
-		samples := make([]string, len(trees))
-		for i := range trees {
-			samples[i] = trees[i].Nodes[idx].Text
-		}
-		keys = append(keys, Key{Key: key, Path: bn.Path, Samples: samples})
-		ops = append(ops, patch.Op{Op: "setText", Path: bn.Path, Text: "{{" + key + "}}"})
 	}
 
 	// 3) 베이스의 사본에 패치를 적용해 템플릿을 만든다
@@ -91,6 +109,55 @@ func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patc
 	}
 
 	return tp, &Schema{Base: names[0], Hash: pkgs[0].Hash, Keys: keys}, nil, nil
+}
+
+// firstPartName 은 too_few_documents 에러의 Path 로 쓸 파트명을 낸다.
+// 문서가 하나뿐이면 그 문서의 첫 본문 파트, 아예 없으면 빈 문자열이다.
+// 파트를 못 여는(미지원 포맷) 경우도 조용히 빈 문자열로 넘어간다 — 이 에러의
+// 요점은 "문서 수가 부족하다"지 포맷 판정이 아니다.
+func firstPartName(pkgs []*opc.Package) string {
+	if len(pkgs) != 1 {
+		return ""
+	}
+	d, err := parts.Open(pkgs[0])
+	if err != nil {
+		return ""
+	}
+	ps := d.Parts()
+	if len(ps) == 0 {
+		return ""
+	}
+	return ps[0].Name
+}
+
+// diffPartSet 은 두 문서의 파트 계획이 같은지 본다 — Name·Ref·Root 열 전부.
+// 파트 집합이 다르면(포맷이 다르거나 파트 수가 다르면) 최초로 갈린 파트를 지목한다.
+func diffPartSet(a, b []parts.Part, an, bn string) *patch.Error {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return &patch.Error{
+				Path:   a[i].Name,
+				Reason: "structure_mismatch",
+				Detail: fmt.Sprintf("%s 는 %+v, %s 는 %+v", an, a[i], bn, b[i]),
+			}
+		}
+	}
+	if len(a) != len(b) {
+		longer, name, short := a, an, len(b)
+		if len(b) > len(a) {
+			longer, name, short = b, bn, len(a)
+		}
+		return &patch.Error{
+			Path:   longer[short].Name,
+			Reason: "structure_mismatch",
+			Detail: fmt.Sprintf("%s 에만 있는 파트 (파트 수 %d vs %d)", name, len(a), len(b)),
+		}
+	}
+	return nil
 }
 
 // diffStructure 는 두 트리의 경로 순열이 같은지 본다.

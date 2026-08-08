@@ -34,6 +34,45 @@ func TestDocumentLazyScan(t *testing.T) {
 	}
 }
 
+// TestTreeFillsNodePartPerPart 는 서로 다른 두 파트를 스캔했을 때 각 파트의
+// 노드가 자기 파트의 이름을 갖는지 본다. Tree 가 모든 노드에 같은(예: 첫 스캔한
+// 파트의) 이름을 잘못 채워도 파트 하나만 스캔하는 테스트로는 잡히지 않는다 —
+// 두 파트를 스캔해 서로 다른 이름이 나오는지 직접 대조해야 잡힌다.
+func TestTreeFillsNodePartPerPart(t *testing.T) {
+	d, err := parts.Open(openReal(t, "deck-a.pptx"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	name1 := d.Parts()[0].Name
+	name2 := d.Parts()[1].Name
+	if name1 == name2 {
+		t.Fatal("테스트 전제가 깨졌다 — 두 파트 이름이 같다")
+	}
+
+	t1, err := d.Tree(name1)
+	if err != nil {
+		t.Fatalf("Tree(%s): %v", name1, err)
+	}
+	t2, err := d.Tree(name2)
+	if err != nil {
+		t.Fatalf("Tree(%s): %v", name2, err)
+	}
+	if len(t1.Nodes) == 0 || len(t2.Nodes) == 0 {
+		t.Fatal("노드가 비었다")
+	}
+
+	for _, n := range t1.Nodes {
+		if n.Part != name1 {
+			t.Fatalf("%s 의 노드가 Part=%q, want %q", name1, n.Part, name1)
+		}
+	}
+	for _, n := range t2.Nodes {
+		if n.Part != name2 {
+			t.Fatalf("%s 의 노드가 Part=%q, want %q", name2, n.Part, name2)
+		}
+	}
+}
+
 func TestDocumentResolveLogicalAndPhysical(t *testing.T) {
 	d, err := parts.Open(openReal(t, "deck-a.pptx"))
 	if err != nil {

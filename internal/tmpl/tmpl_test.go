@@ -46,6 +46,9 @@ func TestExtractFindsVariableParts(t *testing.T) {
 	if k.Key != "k1" {
 		t.Fatalf("키 이름 %q, 기대 %q", k.Key, "k1")
 	}
+	if k.Part != "word/document.xml" {
+		t.Fatalf("키 파트 %q, 기대 %q", k.Part, "word/document.xml")
+	}
 	if k.Path != "document/body[1]/p[2]/r[1]/t[1]" {
 		t.Fatalf("키 경로 %q", k.Path)
 	}
@@ -86,10 +89,10 @@ func TestExtractAssignsKeysInDocumentOrder(t *testing.T) {
 	if len(sch.Keys) != 2 {
 		t.Fatalf("키 %d개, 기대 2개", len(sch.Keys))
 	}
-	if sch.Keys[0].Key != "k1" || sch.Keys[0].Path != "document/body[1]/p[1]/r[1]/t[1]" {
+	if sch.Keys[0].Key != "k1" || sch.Keys[0].Part != "word/document.xml" || sch.Keys[0].Path != "document/body[1]/p[1]/r[1]/t[1]" {
 		t.Fatalf("k1 이 문서 순서의 첫 가변부가 아니다: %+v", sch.Keys[0])
 	}
-	if sch.Keys[1].Key != "k2" || sch.Keys[1].Path != "document/body[1]/p[3]/r[1]/t[1]" {
+	if sch.Keys[1].Key != "k2" || sch.Keys[1].Part != "word/document.xml" || sch.Keys[1].Path != "document/body[1]/p[3]/r[1]/t[1]" {
 		t.Fatalf("k2 가 부정확하다: %+v", sch.Keys[1])
 	}
 }
@@ -108,6 +111,26 @@ func TestExtractRejectsStructureMismatch(t *testing.T) {
 	}
 	if errs[0].Path == "" {
 		t.Fatal("갈라진 경로를 지목하지 않았다")
+	}
+}
+
+// TestExtractRejectsPartSetMismatch 는 포맷이 다른(파트 집합이 다른) 문서 쌍이
+// 노드 비교까지 가지 않고 파트 집합 단계에서 거절되는지 본다.
+func TestExtractRejectsPartSetMismatch(t *testing.T) {
+	a, err := opc.OpenBytes(testutil.MinimalDocx([]string{"고정", "A"}))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	b, err := opc.Open(filepath.Join("..", "..", "testdata", "real", "deck-a.pptx"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "deck.pptx"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "structure_mismatch" {
+		t.Fatalf("포맷이 다른 문서가 거절되지 않았다: %+v", errs)
 	}
 }
 
