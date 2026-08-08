@@ -24,6 +24,12 @@ type splice struct {
 	path string
 }
 
+// pending 은 검증까지 통과했지만 아직 쓰지 않은 파트 버퍼 하나다.
+type pending struct {
+	name string
+	out  []byte
+}
+
 // Apply 는 패치를 적용한다. 파트가 여럿이어도 전부 적용되거나 전무다.
 //
 // 반환된 []Error 가 비어있지 않으면 패키지는 **손대지 않은 상태**다.
@@ -44,10 +50,36 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 		return nil, err
 	}
 
+	buffers, errs, err := resolveAndBuffer(doc, pt.Ops)
+	if err != nil {
+		return nil, err
+	}
+	if len(errs) > 0 {
+		return errs, nil
+	}
+	if len(buffers) == 0 {
+		return nil, nil // 빈 패치 — 아무것도 건드리지 않는다 (I1)
+	}
+
+	// 모든 버퍼를 검증한 뒤에야 쓴다.
+	// 파트 A 만 Replace 하고 B 가 깨지면 문서가 반쯤 바뀐다.
+	for _, b := range buffers {
+		if err := p.Replace(b.name, b.out); err != nil {
+			return nil, err
+		}
+	}
+	return nil, nil
+}
+
+// resolveAndBuffer 는 op 을 파트별로 갈라 각 파트를 검증·스플라이스해 버퍼로
+// 만든다. Replace 는 부르지 않는다 — Apply 와 PartsLoadedBy 가 이 함수 하나를
+// 공유하므로 "op 이 지목한 파트만 스캔한다"는 지연 로딩 계약이 두 곳에서
+// 따로 구현되어 어긋날 여지가 없다.
+func resolveAndBuffer(doc *parts.Document, ops []Op) ([]pending, []Error, error) {
 	// 1) op 을 파트별로 가른다. 파트 해석 실패는 여기서 모은다.
 	byPart := map[string][]Op{}
 	var errs []Error
-	for _, op := range pt.Ops {
+	for _, op := range ops {
 		name, e := resolvePart(doc, op)
 		if e != nil {
 			errs = append(errs, *e)
@@ -56,43 +88,31 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 		byPart[name] = append(byPart[name], op)
 	}
 	if len(errs) > 0 {
-		return errs, nil
+		return nil, errs, nil
 	}
 	if len(byPart) == 0 {
-		return nil, nil // 빈 패치 — 아무것도 건드리지 않는다 (I1)
+		return nil, nil, nil // 빈 패치 — 아무것도 건드리지 않는다 (I1)
 	}
 
 	// 2) 파트별로 검증하고 버퍼를 만든다. 아직 아무것도 쓰지 않는다.
 	//    맵이 아니라 계획 순서로 돌아 결정성을 지킨다.
-	type pending struct {
-		name string
-		out  []byte
-	}
 	var buffers []pending
 	for _, part := range doc.Parts() {
-		ops, ok := byPart[part.Name]
+		partOps, ok := byPart[part.Name]
 		if !ok {
 			continue
 		}
 		tree, err := doc.Tree(part.Name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		out, es := spliceOne(tree, part, ops)
+		out, es := spliceOne(tree, part, partOps)
 		if len(es) > 0 {
-			return es, nil
+			return nil, es, nil
 		}
 		buffers = append(buffers, pending{name: part.Name, out: out})
 	}
-
-	// 3) 모든 버퍼를 검증한 뒤에야 쓴다.
-	//    파트 A 만 Replace 하고 B 가 깨지면 문서가 반쯤 바뀐다.
-	for _, b := range buffers {
-		if err := p.Replace(b.name, b.out); err != nil {
-			return nil, err
-		}
-	}
-	return nil, nil
+	return buffers, nil, nil
 }
 
 // resolvePart 는 op 의 Part 를 물리 파트명으로 푼다.
@@ -307,20 +327,14 @@ func nearbyHint(tree *xmlscan.Tree, path string) string {
 
 // PartsLoadedBy 는 이 패치를 적용할 때 실제로 스캔되는 파트를 돌려준다.
 // 지연 로딩이 주석이 아니라 계약임을 테스트가 고정하기 위한 것이다.
+// Apply 와 같은 resolveAndBuffer 를 불러 지연 스캔 루프 자체를 관찰한다 —
+// 따로 다시 구현하면 두 로직이 갈라져도 이 테스트가 못 잡는다.
 // 패키지를 변경하지 않는다 — 검증만 하고 버린다.
 func PartsLoadedBy(p *opc.Package, pt Patch) []string {
 	doc, err := parts.Open(p)
 	if err != nil {
 		return nil
 	}
-	for _, op := range pt.Ops {
-		name, e := resolvePart(doc, op)
-		if e != nil {
-			continue
-		}
-		if _, err := doc.Tree(name); err != nil {
-			continue
-		}
-	}
+	resolveAndBuffer(doc, pt.Ops)
 	return doc.Loaded()
 }

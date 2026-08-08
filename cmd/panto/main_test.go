@@ -274,6 +274,26 @@ func TestDumpReportsUnsupportedMethodAsInputError(t *testing.T) {
 	assertUnsupportedReported(t, code, stdout, in)
 }
 
+// TestDumpBadSelectorIsInputError 는 --part 선택자가 아무 파트도 못 고르면
+// exit 1 + part_not_found 로 stdout JSON 보고되는지 본다 (리뷰 라운드 Finding 1).
+// 이전엔 dump.Build 의 선택자 실패가 fail() 을 타 내부 오류(exit 2, stderr)로 샜다 —
+// 사용자 오탈자가 "도구가 고장났다"로 잘못 읽힌다.
+func TestDumpBadSelectorIsInputError(t *testing.T) {
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdDump([]string{
+			filepath.Join("..", "..", "testdata", "real", "deck-a.pptx"),
+			"--part", "ppt/nope/*",
+		})
+	})
+	if code != exitInput {
+		t.Fatalf("잘못된 선택자인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "part_not_found") {
+		t.Fatalf("stdout 에 part_not_found 가 없다: %s", stdout)
+	}
+}
+
 // TestApplyReportsUnsupportedMethodAsInputError 는 같은 것을 apply 에서 본다.
 // Apply 는 이제 op 이 지목한 파트만 지연 스캔한다 (Task 6) — 빈 패치는
 // 아무 파트도 스캔하지 않으므로, op 이 word/document.xml 을 실제로
