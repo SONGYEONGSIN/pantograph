@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +61,31 @@ func emit(v any) error {
 	}
 	_, err = os.Stdout.Write(append(b, '\n'))
 	return err
+}
+
+// decodeStrict 는 JSON 파일을 읽되 **모르는 필드와 뒤에 남은 내용을 모두 거절한다.**
+//
+// encoding/json 의 두 기본 동작이 각각 조용히 위험하다.
+//
+//	Unmarshal — 모르는 필드를 버린다. "text" 를 "value" 로 잘못 쓴 setText 가
+//	            빈 문자열이 되어 {"ok": true} 와 함께 그 자리의 텍스트를 지웠다.
+//	Decoder   — 첫 값만 읽고 뒤를 안 본다. 잘리거나 두 번 이어붙은 파일이 통과한다.
+//
+// 둘 다 성공을 보고하면서 사용자가 쓴 것과 다른 일을 한다. 하나를 고치려고
+// 다른 하나로 갈아타면 구멍이 옮겨갈 뿐이라, 두 검사를 함께 여기 한 곳에 둔다.
+//
+// 뒤에 남은 내용은 Token() 이 io.EOF 를 내는지로 본다 — Decoder.More() 는 다음
+// 바이트가 `]` 나 `}` 면 false 를 내므로 `{...}]` 같은 꼬리를 놓친다.
+func decodeStrict(b []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("JSON 값 뒤에 내용이 더 있다")
+	}
+	return nil
 }
 
 // classify 는 오류가 stdout JSON 으로 보고할 **입력 부류**인지 가르고 그 reason 을 낸다.

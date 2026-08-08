@@ -561,3 +561,45 @@ func TestTmplFillRejectsUnknownSchemaField(t *testing.T) {
 		t.Fatalf("스키마 오타가 파싱을 통과해 채우기까지 갔다: %s", stdout)
 	}
 }
+
+// TestRejectsTrailingJSON 은 첫 JSON 값 뒤에 내용이 더 있으면 거절하는지 본다.
+//
+// json.Unmarshal 은 뒤에 남은 내용을 오류로 봤지만 json.Decoder.Decode 는 첫
+// 값만 읽고 멈춘다. DisallowUnknownFields 를 쓰려고 Decoder 로 바꾸면 이 검사가
+// 조용히 사라져, 잘린 파일이나 두 번 이어붙인 파일이 **성공으로** 통과한다 —
+// 모르는 필드를 막으려다 같은 부류의 구멍을 새로 여는 셈이다.
+//
+// `]` 를 따로 보는 이유: Decoder.More() 는 다음 바이트가 `]` 나 `}` 면 false 를
+// 내므로 그것만으로는 이 경우를 못 잡는다. Token() 이 io.EOF 를 내는지로 본다.
+func TestRejectsTrailingJSON(t *testing.T) {
+	head := `{"ops":[{"op":"setText","path":"document/body[1]/p[1]/r[1]/t[1]","text":"값"}]}`
+	for _, c := range []struct{ name, body string }{
+		{"쓰레기", head + ` 이 뒤는 JSON 이 아니다`},
+		{"닫는 괄호", head + `]`},
+		{"값 두 개", head + head},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			inPath := filepath.Join(dir, "in.docx")
+			if err := os.WriteFile(inPath, testutil.MinimalDocx([]string{"원래 텍스트"}), 0o644); err != nil {
+				t.Fatalf("입력 파일 쓰기 실패: %v", err)
+			}
+			patchPath := filepath.Join(dir, "patch.json")
+			if err := os.WriteFile(patchPath, []byte(c.body), 0o644); err != nil {
+				t.Fatalf("패치 파일 쓰기 실패: %v", err)
+			}
+			outPath := filepath.Join(dir, "out.docx")
+
+			var code int
+			stdout := captureStdout(t, func() {
+				code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+			})
+			if code != exitInput {
+				t.Fatalf("여분의 내용이 있는 패치인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+			}
+			if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+				t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+			}
+		})
+	}
+}

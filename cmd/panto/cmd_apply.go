@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"os"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
@@ -44,9 +42,7 @@ func cmdApply(args []string) int {
 		return die(exitInternal, "%v", err)
 	}
 	var pt patch.Patch
-	dec := json.NewDecoder(bytes.NewReader(pb))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&pt); err != nil {
+	if err := decodeStrict(pb, &pt); err != nil {
 		return die(exitInput, "패치 JSON 파싱 실패: %v", err)
 	}
 
