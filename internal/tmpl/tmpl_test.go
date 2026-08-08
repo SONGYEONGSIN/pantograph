@@ -378,6 +378,70 @@ func TestTemplateReversalReal(t *testing.T) {
 	}
 }
 
+// I4a — 실제 PowerPoint 문서. 픽스처가 없으면 FAIL 이다. skip 으로 바꾸지 말 것 (spec §10).
+//
+// TestTemplateReversalReal 은 docx 만 본다. Task 7 리뷰에서 남은 finding —
+// tmpl.Extract 의 키 번호가 파트를 가로질러 이어지는지 시험하는 테스트가
+// 없었다: 지금까지 Extract 의 키 루프에 닿는 모든 테스트가 파트 하나짜리
+// docx 를 썼으므로, 파트별 루프가 정확히 한 번만 돌아 예전 단일 파트
+// 코드와 구별이 안 됐다. deck-a·deck-b 는 슬라이드 3장 각각에서 제목이
+// 갈리므로, 여기서 잡히는 키가 파트 여러 개에 걸쳐 있어야만 이 시험이
+// 다중 파트를 실제로 건드린 것이다.
+func TestPptxTemplateReversalReal(t *testing.T) {
+	var ps []*opc.Package
+	var names []string
+	for _, n := range []string{"deck-a.pptx", "deck-b.pptx"} {
+		p, err := opc.Open(filepath.Join("..", "..", "testdata", "real", n))
+		if err != nil {
+			t.Fatalf("Open %s: %v", n, err)
+		}
+		ps = append(ps, p)
+		names = append(names, n)
+	}
+
+	tp, sch, errs, err := tmpl.Extract(ps, names)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+	if len(sch.Keys) == 0 {
+		t.Fatal("가변부가 하나도 안 잡혔다")
+	}
+	// 키가 여러 파트에 걸쳐 있어야 다중 파트 템플릿을 시험한 것이다
+	seen := map[string]bool{}
+	for _, k := range sch.Keys {
+		seen[k.Part] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("키가 파트 %d개에만 있다 — 다중 파트를 시험하지 못했다", len(seen))
+	}
+
+	vals, err := tmpl.Values(ps[0], sch)
+	if err != nil {
+		t.Fatalf("Values: %v", err)
+	}
+	filled, err := opc.OpenBytes(mustBytes(t, tp))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	if fe, err := tmpl.Fill(filled, sch, vals); err != nil || len(fe) != 0 {
+		t.Fatalf("Fill: err=%v errs=%+v", err, fe)
+	}
+
+	for _, k := range sch.Keys {
+		want, err := ps[0].Part(k.Part)
+		if err != nil {
+			t.Fatalf("Part: %v", err)
+		}
+		got, err := filled.Part(k.Part)
+		if err != nil {
+			t.Fatalf("Part: %v", err)
+		}
+		if !bytes.Equal(want, got) {
+			t.Fatalf("I4a 위반 — %s 가 원본과 다르다", k.Part)
+		}
+	}
+}
+
 // I4b — 나머지 문서에 대한 텍스트 수준 일치
 func TestTemplateReversalOthersTextLevel(t *testing.T) {
 	ps, names := pkgs(t,

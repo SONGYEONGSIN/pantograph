@@ -40,15 +40,16 @@ func TestIdentityGenerated(t *testing.T) {
 	assertRoundTrip(t, src)
 }
 
-// I1 항등 — 실제 Word docx.
+// I1 항등 — 실제 Word·PowerPoint 문서.
 // 픽스처가 없으면 FAIL 이다. skip 으로 바꾸지 말 것 (spec §10).
 func TestIdentityReal(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", "testdata", "real", "*.docx"))
+	paths, err := filepath.Glob(filepath.Join("..", "..", "testdata", "real", "*.*"))
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
+	paths = filterDocxPptx(paths)
 	if len(paths) == 0 {
-		t.Fatal("testdata/real/*.docx 없음 — I1 은 실제 Word 문서로만 의미가 있다 (spec §10)")
+		t.Fatal("testdata/real/*.docx|*.pptx 없음 — I1 은 실제 Office 문서로만 의미가 있다 (spec §10)")
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
@@ -59,6 +60,18 @@ func TestIdentityReal(t *testing.T) {
 			assertRoundTrip(t, src)
 		})
 	}
+}
+
+// filterDocxPptx 는 README.md 등 문서가 아닌 파일을 걸러내고 .docx·.pptx 만 남긴다.
+func filterDocxPptx(paths []string) []string {
+	out := paths[:0]
+	for _, p := range paths {
+		switch filepath.Ext(p) {
+		case ".docx", ".pptx":
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // buildZip 은 주어진 엔트리로 zip 을 만든다. 이름이 겹쳐도 그대로 쓴다.

@@ -116,45 +116,133 @@ func TestLocalityUntouchedEntriesAreByteIdentical(t *testing.T) {
 	}
 }
 
-// I2 국소성 — 실제 Word 문서. 픽스처가 없으면 FAIL (spec §10).
+// I2 국소성 — 실제 Word·PowerPoint 문서. 픽스처가 없으면 FAIL (spec §10).
+//
+// pptx 는 docx 보다 국소성이 더 강한 주장이 된다(설계 §7) — 슬라이드마다
+// 별도 파트이므로, 슬라이드 하나를 고쳤을 때 나머지 슬라이드 파트의 압축
+// 데이터까지 원본과 완전히 같아야 한다. 텍스트 비교가 아니라 zip 원시
+// (압축된) 바이트로 본다 — 압축 알고리즘이 같은 내용도 다른 바이트로
+// 낼 수 있으므로, 압축 데이터가 같다는 것 자체가 "재압축하지 않고
+// 건드리지 않았다"는 더 강한 증거다.
 func TestLocalityReal(t *testing.T) {
-	paths, err := filepath.Glob(filepath.Join("..", "..", "testdata", "real", "*.docx"))
-	if err != nil {
-		t.Fatalf("Glob: %v", err)
-	}
-	if len(paths) == 0 {
-		t.Fatal("testdata/real/*.docx 없음 (spec §10)")
-	}
-	src, err := os.ReadFile(paths[0])
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	p := open(t, src)
+	t.Run("docx", func(t *testing.T) {
+		paths, err := filepath.Glob(filepath.Join("..", "..", "testdata", "real", "*.docx"))
+		if err != nil {
+			t.Fatalf("Glob: %v", err)
+		}
+		if len(paths) == 0 {
+			t.Fatal("testdata/real/*.docx 없음 (spec §10)")
+		}
+		src, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		p := open(t, src)
 
-	// 첫 문단을 빈 문단으로 교체 — document.xml 만 dirty 가 된다.
-	errs, err := patch.Apply(p, patch.Patch{
-		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p/>`}},
+		// 첫 문단을 빈 문단으로 교체 — document.xml 만 dirty 가 된다.
+		errs, err := patch.Apply(p, patch.Patch{
+			Hash: p.Hash,
+			Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p/>`}},
+		})
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if len(errs) != 0 {
+			t.Fatalf("에러: %+v", errs)
+		}
+		got, err := p.Bytes()
+		if err != nil {
+			t.Fatalf("Bytes: %v", err)
+		}
+		before, after := rawEntries(t, src), rawEntries(t, got)
+		for name, wantRaw := range before {
+			if name == "word/document.xml" {
+				continue
+			}
+			if !bytes.Equal(wantRaw, after[name]) {
+				t.Fatalf("안 건드린 엔트리의 압축 데이터가 달라졌다: %s", name)
+			}
+		}
 	})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-	if len(errs) != 0 {
-		t.Fatalf("에러: %+v", errs)
-	}
-	got, err := p.Bytes()
-	if err != nil {
-		t.Fatalf("Bytes: %v", err)
-	}
-	before, after := rawEntries(t, src), rawEntries(t, got)
-	for name, wantRaw := range before {
-		if name == "word/document.xml" {
-			continue
+
+	t.Run("pptx", func(t *testing.T) {
+		paths, err := filepath.Glob(filepath.Join("..", "..", "testdata", "real", "*.pptx"))
+		if err != nil {
+			t.Fatalf("Glob: %v", err)
 		}
-		if !bytes.Equal(wantRaw, after[name]) {
-			t.Fatalf("안 건드린 엔트리의 압축 데이터가 달라졌다: %s", name)
+		if len(paths) == 0 {
+			t.Fatal("testdata/real/*.pptx 없음 (spec §10)")
 		}
-	}
+		src, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		p := open(t, src)
+		d, err := parts.Open(p)
+		if err != nil {
+			t.Fatalf("parts.Open: %v", err)
+		}
+		slides := d.Parts()
+		if len(slides) < 2 {
+			t.Fatalf("슬라이드 %d장 — 국소성 시험엔 2장 이상 필요하다", len(slides))
+		}
+		target := slides[0].Name
+		tr, err := d.Tree(target)
+		if err != nil {
+			t.Fatalf("Tree: %v", err)
+		}
+		var path string
+		for _, n := range tr.Nodes {
+			if n.Type == "t" && n.Text != "" {
+				path = n.Path
+				break
+			}
+		}
+		if path == "" {
+			t.Fatalf("%s 에 텍스트 노드가 없다", target)
+		}
+
+		// 첫 슬라이드만 고친다 — 나머지 슬라이드 파트는 손대지 않는다.
+		errs, err := patch.Apply(p, patch.Patch{
+			Hash: p.Hash,
+			Ops:  []patch.Op{{Op: "setText", Part: target, Path: path, Text: "국소성 시험"}},
+		})
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if len(errs) != 0 {
+			t.Fatalf("에러: %+v", errs)
+		}
+		got, err := p.Bytes()
+		if err != nil {
+			t.Fatalf("Bytes: %v", err)
+		}
+		before, after := rawEntries(t, src), rawEntries(t, got)
+		for name, wantRaw := range before {
+			if name == target {
+				continue
+			}
+			if !bytes.Equal(wantRaw, after[name]) {
+				t.Fatalf("안 건드린 엔트리의 압축 데이터가 달라졌다: %s", name)
+			}
+		}
+
+		// 위 루프가 이미 나머지 슬라이드를 포함해 모든 엔트리를 훑지만, 여기서
+		// 슬라이드 파트만 따로 짚어 "나머지 슬라이드가 그대로인가"를 직접 확인한다.
+		untouchedSlides := 0
+		for _, pt := range slides {
+			if pt.Name == target {
+				continue
+			}
+			if !bytes.Equal(before[pt.Name], after[pt.Name]) {
+				t.Fatalf("건드리지 않은 슬라이드의 압축 데이터가 달라졌다: %s", pt.Name)
+			}
+			untouchedSlides++
+		}
+		if untouchedSlides == 0 {
+			t.Fatal("확인할 다른 슬라이드가 없다 — 국소성 시험이 무의미하다")
+		}
+	})
 }
 
 func TestAtomicityNothingAppliedOnBadPath(t *testing.T) {
