@@ -204,7 +204,7 @@ func blame(content []byte, splices []splice) string {
 // nearbyHint 는 경로를 못 찾았을 때 형제 개수를 알려준다.
 // 형태를 못 알아본 경로는 왜 힌트를 못 주는지 말한다 — 빈 detail 로 침묵하지 않는다.
 func nearbyHint(tree *xmlscan.Tree, path string) string {
-	const shape = `경로 형태가 "부모/이름[n]" 이 아니라 형제 수를 셀 수 없다 (루트는 "word")`
+	const shape = `경로 형태가 "부모/이름[n]" 이 아니라 형제 수를 셀 수 없다 (루트 경로엔 인덱스가 없다)`
 	i := strings.LastIndex(path, "/")
 	if i < 0 {
 		return shape

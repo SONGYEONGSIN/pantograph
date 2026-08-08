@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
@@ -180,6 +181,35 @@ func TestAtomicityNothingAppliedOnBadPath(t *testing.T) {
 	}
 	if !bytes.Equal(src, got) {
 		t.Fatal("실패한 패치인데 문서가 바뀌었다 — 원자성 위반")
+	}
+}
+
+// TestPathNotFoundHintOnBareRootDoesNotNameRootAlias 는 "/" 가 없는 경로에
+// path_not_found 가 나면 힌트(Detail)가 특정 루트 별칭을 이름으로 박아넣지
+// 않는지 본다. 루트 별칭은 파트마다 다르다 — docx 는 "document", pptx 는
+// "sld" 다. 힌트 문구가 특정 값을 하드코딩하면 다른 파트를 스캔할 때마다
+// 거짓이 된다. 정확한 문구가 아니라 "특정 별칭을 이름으로 대지 않는다"는
+// 실질만 고정한다 — 문구가 또 바뀌어도 이 테스트는 다시 쓸 필요가 없다.
+func TestPathNotFoundHintOnBareRootDoesNotNameRootAlias(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "replaceRaw", Path: "root", XML: `<w:p/>`}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "path_not_found" {
+		t.Fatalf("에러가 부정확하다: %+v", errs)
+	}
+	detail := errs[0].Detail
+	if detail == "" {
+		t.Fatal("Detail 이 비어있다 — 힌트를 못 주는 이유를 말해야 한다")
+	}
+	for _, alias := range []string{`"word"`, `"document"`} {
+		if strings.Contains(detail, alias) {
+			t.Fatalf("Detail 이 특정 루트 별칭을 이름으로 박아넣었다: %q (별칭 %s 포함)", detail, alias)
+		}
 	}
 }
 
