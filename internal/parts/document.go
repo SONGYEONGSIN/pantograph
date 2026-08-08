@@ -111,10 +111,15 @@ func (d *Document) Select(sels []string) ([]Part, error) {
 
 	picked := make(map[string]bool)
 	for _, sel := range sels {
-		before := len(picked)
+		// picked 는 선택자 전체가 공유하는 합집합이라, 그 크기 변화로는
+		// "이 선택자가 뭘 골랐나"를 판정할 수 없다 — 앞 선택자가 이미 고른
+		// 파트를 뒤 선택자가 다시 가리키면 picked 는 안 늘지만 그 선택자는
+		// 여전히 유효하다. 그래서 이 선택자만의 매치 여부를 따로 센다.
+		matched := false
 
 		if name, ok := d.Resolve(sel); ok {
 			picked[name] = true
+			matched = true
 		} else {
 			for _, pt := range d.plan {
 				ok, err := path.Match(sel, pt.Name)
@@ -123,11 +128,12 @@ func (d *Document) Select(sels []string) ([]Part, error) {
 				}
 				if ok {
 					picked[pt.Name] = true
+					matched = true
 				}
 			}
 		}
 
-		if len(picked) == before {
+		if !matched {
 			return nil, fmt.Errorf("선택자 %q 가 아무 파트도 고르지 못했다", sel)
 		}
 	}

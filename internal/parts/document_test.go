@@ -1,6 +1,7 @@
 package parts_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/parts"
@@ -91,6 +92,30 @@ func TestDocumentSelect(t *testing.T) {
 	// 아무것도 못 고르는 선택자는 거절한다 — 조용한 빈 덤프는 오타를 숨긴다
 	if _, err := d.Select([]string{"ppt/nope/*"}); err == nil {
 		t.Error("빈 선택자가 거절되지 않았다")
+	}
+
+	// 겹치는 선택자 — 앞 선택자가 이미 고른 파트를 뒤 선택자가 다시 가리켜도
+	// 유효한 선택자로 인정돼야 한다. picked 는 선택자 간에 공유되는 합집합이므로
+	// "이 선택자가 뭘 새로 골랐나"가 아니라 "picked 가 늘었나"로 판정하면
+	// 이런 겹침에서 뒤 선택자가 오탈자로 오검출된다.
+	overlap, err := d.Select([]string{"ppt/slides/*", "pptx/slide[2]"})
+	if err != nil {
+		t.Fatalf("Select 겹침: %v", err)
+	}
+	if len(overlap) != 3 {
+		t.Fatalf("겹치는 선택자 → %d개, want 3 (중복 없이 계획 순서)", len(overlap))
+	}
+	for i, pt := range overlap {
+		if pt.Name != all[i].Name {
+			t.Fatalf("overlap[%d] = %+v, want %+v (계획 순서)", i, pt, all[i])
+		}
+	}
+
+	// 유효한 선택자 옆에 와도 오탈자 선택자는 여전히 거절되고, 에러가 그 선택자를 지목한다
+	if _, err := d.Select([]string{"ppt/slides/*", "ppt/nope/*"}); err == nil {
+		t.Error("유효한 선택자와 같이 와도 오탈자 선택자가 거절되지 않았다")
+	} else if !strings.Contains(err.Error(), "ppt/nope/*") {
+		t.Errorf("에러가 오탈자 선택자를 지목하지 않는다: %v", err)
 	}
 }
 
