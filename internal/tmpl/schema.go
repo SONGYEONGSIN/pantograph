@@ -44,10 +44,17 @@ func isVolatile(local string) bool {
 	return len(local) >= 4 && local[:4] == "rsid"
 }
 
-// VolatileElements 는 요소 전체가 통째로 휘발성인 요소의 로컬명이다.
-// VolatileAttrs 와 달리 속성 이름이 아니라 요소 이름으로 판정한다 —
-// 이 요소들은 "생성할 때마다 새로 찍는 식별자"만 담는 게 존재 이유라
-// 속성 이름으로는 저격할 수 없다.
+// VolatileElements 는 diffMarkup 이 **속성만** 통째로 비교에서 빼는 요소의
+// 로컬명이다 — 요소 전체가 휘발성인 것은 아니다. Type·직접 텍스트·자손은
+// VolatileAttrs 와 마찬가지로 그대로 비교 대상에 남는다. VolatileAttrs 와
+// 달리 속성 이름이 아니라 요소 이름으로 판정한다 — 이 요소들은 "생성할
+// 때마다 새로 찍는 식별자"만 속성으로 담는 게 존재 이유라 속성 이름으로는
+// 저격할 수 없다.
+//
+// 로컬명만으로 키를 잡는 이유: xmlscan.Attr 에는 NS(네임스페이스)가 있지만
+// xmlscan.Node 에는 없다 — 요소의 네임스페이스를 스캐너가 안 담는다는
+// 구조적 한계다. 나중에 이 저격을 네임스페이스까지 좁혀야 한다면 거기서부터
+// 손대야 한다.
 //
 // creationId: PowerPoint 가 도형을 새로 만들 때마다(a16:creationId, 속성
 // 이름은 id) · 슬라이드를 새로 만들 때마다(p14:creationId, 속성 이름은

@@ -87,6 +87,8 @@ type Node struct {
 
 `doc.parts` 는 컨테이너의 전 엔트리(기존과 같음), `doc.scanned` 는 그중 파싱한 것이다. 기존 `doc.scannedPart`(단수 문자열)를 `doc.scanned`(배열)가 대체하고 최상위 `nodes` 배열은 `scannedParts` 로 대체된다.
 
+Go 쪽 이름도 바뀐다. §2 의 `const ScannedPart = "word/document.xml"` 은 없어지고, `scannedParts` 를 이루는 원소 타입이 `dump.ScannedPart` 가 된다 — 이름은 상수 시절과 같지만, 상수와 타입은 같은 패키지에서 식별자를 공유할 수 없다(Go 컴파일 에러 "redeclared in this block"). 그래서 구현 도중에는 상수가 남아 있는 동안 타입을 `dump.Part` 라는 임시 이름으로 뒀고, 상수를 참조하던 `patch`·`tmpl` 이 파트 인식으로 바뀌어 상수가 필요 없어진 뒤에야 상수를 지우고 타입이 `ScannedPart` 이름을 이어받았다. 끝난 상태는 하나뿐이다 — **상수는 없고, 타입 `dump.ScannedPart` 만 있다.**
+
 **노드 JSON 에는 `part` 를 싣지 않는다** — 묶음 머리에 이미 있어 노드마다 반복하면 덤프가 붇는다. Go 의 `Node.Part` 는 채워지며, 파트 경계를 넘어 노드를 다룰 때(패치 검증, 템플릿 비교) 쓴다.
 
 **노드 수준 의미론은 넣지 않는다.** 상위 설계가 약속한 `pptx/slide[3]/shape[title]/text` 는 어느 `sp` 가 title 플레이스홀더인지 알아야 하고(`<p:ph type="title"/>`), 그것은 포맷 의미론이 코어로 새어드는 지점이다. 구조 경로로 먼저 닿게 하고 편의 선택자는 나중에 얹는다.
@@ -209,7 +211,7 @@ hash 잠금은 파일 전체 sha256 이라 어느 파트가 바뀌었든 잡는�
 
 기존 `path_not_found` 는 "파트는 찾았는데 그 안에 경로가 없다" 로 좁혀진다. **에러가 파트와 경로 중 어디서 틀렸는지 구분해서 말한다** — 에이전트가 재시도할 때 필요한 정보다.
 
-선행 슬라이스의 12 개 Reason 은 그대로 유지된다.
+선행 슬라이스의 15 개 Reason 은 그대로 유지된다.
 
 ## 9. CLI 표면
 
@@ -261,6 +263,8 @@ panto tmpl fill    <tmpl> --schema schema.json -d data.json -o out
 
 pptx 픽스처는 PowerPoint 16.x(macOS)를 AppleScript 로 구동해 만든다. 샌드박스 때문에 컨테이너 안에 저장시키고 복사해 온다 — 구체 절차는 프로젝트 메모리에 있다.
 
+네 픽스처 모두 `docProps/core.xml` 을 다시 썼다 — Word·PowerPoint 가 이 파트에 찍는 macOS 계정 실명(`dc:creator`·`cp:lastModifiedBy`)을 지우기 위해서다. 재작성은 이 프로젝트의 `internal/opc.Open` → `Part`/`Replace`/`Bytes` 로 했다 — 그래야 나머지 모든 zip 엔트리가 원본 생산자 바이트 그대로 남는다. Python `zipfile`이나 `archive/zip`으로 컨테이너를 통째로 다시 만들면 그 자체가 다른 라이터의 산출물이 되어 I1·I2 가 시험하는 "실제 오피스 제품군이 낸 바이트"라는 전제가 허물어진다. 자세한 경위는 `testdata/real/README.md` 참조.
+
 ## 11. 실측 기록
 
 pptx 픽스처를 만들며 확인한 것. 설계의 근거이므로 남긴다.
@@ -272,6 +276,10 @@ pptx 픽스처를 만들며 확인한 것. 설계의 근거이므로 남긴다.
 **슬라이드 순서와 파일명** — 3 장 덱을 만들어 저장 전에 한 번, 저장 후에 한 번 순서를 바꿔 재저장했다. 두 경우 모두 `slideN.xml` 이 N 번 슬라이드였다. PowerPoint 가 매 저장마다 파트를 순서대로 다시 번호 매긴다. **관측은 PowerPoint 16.x 하나뿐이며, 다른 생산자(python-pptx·Google Slides·Keynote 내보내기)가 같은 정규화를 한다는 근거는 없다.**
 
 **규모** — 거의 빈 슬라이드가 요소 약 52 개, `slideMaster1.xml` 하나가 383 개, 전체 XML 파트 합계 95KB(3 장 덱). 50 장 실무 덱이면 본문만 수천 노드다. `--part` 없이는 에이전트의 컨텍스트가 덤프로 찬다.
+
+**PowerPoint 는 도형·슬라이드마다 새 생성 ID 를 찍는다.** `TestPptxTemplateReversalReal` 을 처음 붙였을 때 `tmpl.Extract` 가 `nontext_diff` 로 거절했다 — 같은 양식의 `deck-a`/`deck-b` 인데도 실패한 것이다. 원인은 `internal/tmpl` 의 휘발성 속성 집합(`VolatileAttrs`: `paraId`·`textId`·`w:rsid*`)이 Word 의 스탬프만 알고 있었던 것이었다. PowerPoint 는 도형을 새로 만들 때마다 `a16:creationId`(속성 이름 `id`)에 새 GUID 를, 슬라이드를 새로 만들 때마다 `p14:creationId`(속성 이름 `val`)에 새 값을 찍는다 — 내용과 무관하게 매 생성마다 달라지므로 같은 양식의 두 덱이라도 이 두 속성값은 항상 다르고, `Extract` 는 키를 만들기도 전에 `nontext_diff` 로 거절했다.
+
+고친 방식은 속성 스코프가 아니라 **요소 스코프**(`VolatileElements`, `internal/tmpl/schema.go`)다. 원인 속성의 이름이 하필 `id`·`val` 인데, 이 둘은 OOXML 전역에서 진짜 내용(색상 값 등)도 나르는 흔한 이름이라 속성 이름 단위로 전역으로 빼면 비교가 눈을 감는다 — 슬라이드 한 장만도 `id=` 속성 5 개 중 3 개가 진짜 도형 식별자이고, 슬라이드 마스터 하나에는 색상·크기·테마 값을 나르는 `val=` 속성이 47 개다. `creationId` 라는 요소 이름 자체로 저격하면 그 안의 속성만 빠지고 다른 곳의 `id`·`val` 은 그대로 비교 대상에 남는다.
 
 ## 12. 범위 밖 · 미해결
 

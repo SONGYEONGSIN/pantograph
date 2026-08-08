@@ -244,7 +244,8 @@ func diffMarkup(bn xmlscan.Node, trees []*xmlscan.Tree, idx int, names []string)
 }
 
 // stableAttrs 는 휘발성 속성을 뺀 속성 목록이다. 원문 순서를 유지한다.
-// 요소 자체가 VolatileElements 에 있으면 속성을 통째로 비교에서 뺀다.
+// 요소 자체가 VolatileElements 에 있으면 그 요소의 속성만 통째로 비교에서
+// 뺀다 — Type·직접 텍스트·자손은 diffMarkup·diffStructure 가 그대로 본다.
 func stableAttrs(n xmlscan.Node) []xmlscan.Attr {
 	if VolatileElements[n.Type] {
 		return nil
