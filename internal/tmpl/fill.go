@@ -6,7 +6,7 @@ import (
 	"github.com/SONGYEONGSIN/pantograph/internal/dump"
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 // placeholder 는 키의 자리표시자 문자열이다.
@@ -19,7 +19,7 @@ func Values(p *opc.Package, sch *Schema) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := wml.Scan(content)
+	tree, err := xmlscan.Scan(content)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func Fill(tp *opc.Package, sch *Schema, data map[string]string) ([]patch.Error, 
 	if err != nil {
 		return nil, err
 	}
-	tree, err := wml.Scan(content)
+	tree, err := xmlscan.Scan(content)
 	if err != nil {
 		return nil, err
 	}

@@ -1,11 +1,11 @@
-package wml_test
+package xmlscan_test
 
 import (
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/testutil"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 func docXML(t *testing.T, paragraphs []string) []byte {
@@ -22,7 +22,7 @@ func docXML(t *testing.T, paragraphs []string) []byte {
 }
 
 func TestScanAssignsPaths(t *testing.T) {
-	tree, err := wml.Scan(docXML(t, []string{"제목", "본문"}))
+	tree, err := xmlscan.Scan(docXML(t, []string{"제목", "본문"}))
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestScanAssignsPaths(t *testing.T) {
 
 func TestScanSpanIsExactOriginalBytes(t *testing.T) {
 	src := docXML(t, []string{"제목"})
-	tree, err := wml.Scan(src)
+	tree, err := xmlscan.Scan(src)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestScanSpanIsExactOriginalBytes(t *testing.T) {
 
 func TestScanInnerExcludesTags(t *testing.T) {
 	src := docXML(t, []string{"제목"})
-	tree, err := wml.Scan(src)
+	tree, err := xmlscan.Scan(src)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestScanInnerExcludesTags(t *testing.T) {
 
 func TestScanSelfClosingElementHasEmptyInner(t *testing.T) {
 	src := []byte(`<w:document xmlns:w="http://x"><w:body><w:p><w:pPr><w:b/></w:pPr></w:p></w:body></w:document>`)
-	tree, err := wml.Scan(src)
+	tree, err := xmlscan.Scan(src)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestScanSelfClosingElementHasEmptyInner(t *testing.T) {
 
 func TestScanAttrsPreserveSourceOrder(t *testing.T) {
 	src := []byte(`<w:document xmlns:w="http://x" xmlns:w14="http://y"><w:body><w:p w14:paraId="AA" w14:textId="BB"/></w:body></w:document>`)
-	tree, err := wml.Scan(src)
+	tree, err := xmlscan.Scan(src)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestScanAttrsPreserveSourceOrder(t *testing.T) {
 }
 
 func TestScanNodesArePreOrder(t *testing.T) {
-	tree, err := wml.Scan(docXML(t, []string{"제목"}))
+	tree, err := xmlscan.Scan(docXML(t, []string{"제목"}))
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestScanNodesArePreOrder(t *testing.T) {
 // "닫히지 않은 요소" 분기까지 가지 않는다. 이름이 그 분기를 검증한다고
 // 주장하지 않도록 일반적인 파싱 거절로 부른다.
 func TestScanRejectsMalformedXML(t *testing.T) {
-	_, err := wml.Scan([]byte(`<w:document xmlns:w="http://x"><w:body></w:document>`))
+	_, err := xmlscan.Scan([]byte(`<w:document xmlns:w="http://x"><w:body></w:document>`))
 	if err == nil {
 		t.Fatal("well-formed 가 아닌 XML 인데 에러가 없다")
 	}

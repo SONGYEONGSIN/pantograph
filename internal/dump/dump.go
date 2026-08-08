@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 // ScannedPart 는 이번 슬라이스가 파싱하는 유일한 파트다.
@@ -20,8 +20,8 @@ type Doc struct {
 }
 
 type Dump struct {
-	Doc   Doc        `json:"doc"`
-	Nodes []wml.Node `json:"nodes"`
+	Doc   Doc            `json:"doc"`
+	Nodes []xmlscan.Node `json:"nodes"`
 }
 
 // Build 는 패키지를 덤프 구조로 바꾼다.
@@ -30,7 +30,7 @@ func Build(p *opc.Package) (*Dump, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := wml.Scan(content)
+	tree, err := xmlscan.Scan(content)
 	if err != nil {
 		return nil, err
 	}

@@ -8,7 +8,7 @@ import (
 
 	"github.com/SONGYEONGSIN/pantograph/internal/dump"
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 // xmlEscaper 는 텍스트 노드에서 의미를 갖는 세 글자만 이스케이프한다.
@@ -18,7 +18,7 @@ import (
 var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 type splice struct {
-	span wml.Span
+	span xmlscan.Span
 	repl []byte
 	path string
 }
@@ -42,7 +42,7 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := wml.Scan(content)
+	tree, err := xmlscan.Scan(content)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 				continue
 			}
 			// self-closing <w:t/> 는 시작/종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다.
-			// wml.Scan 은 이때 Inner 를 요소 바로 뒤의 폭 0 위치로 준다 — 여기 스플라이스하면
+			// xmlscan.Scan 은 이때 Inner 를 요소 바로 뒤의 폭 0 위치로 준다 — 여기 스플라이스하면
 			// 텍스트가 w:t 밖(형제 위치)에 삽입돼 well-formed 지만 의미가 깨진다.
 			if n.Inner.Start >= n.Span.End {
 				errs = append(errs, Error{
@@ -105,7 +105,7 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 			// 네임스페이스까지 본다 — 로컬명만 보면 아무 네임스페이스의
 			// space 속성이나 xml:space 로 통과한다.
 			if strings.TrimSpace(op.Text) != op.Text {
-				if v, ok := n.AttrNS(wml.XMLNS, "space"); !ok || v != "preserve" {
+				if v, ok := n.AttrNS(xmlscan.XMLNS, "space"); !ok || v != "preserve" {
 					errs = append(errs, Error{
 						Path:   op.Path,
 						Reason: "whitespace_needs_preserve",
@@ -171,7 +171,7 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	// 결함은 전적으로 호출자가 준 XML 에 있으므로 입력 오류(코드 1)로 보고한다.
 	// 내부 오류(코드 2)로 보내면, 종료 코드로 재시도 여부를 판단하는 에이전트가
 	// "패치를 고쳐 다시 시도"가 아니라 "도구가 고장났으니 포기"로 잘못 분기한다 (spec §9).
-	if _, err := wml.Scan(out); err != nil {
+	if _, err := xmlscan.Scan(out); err != nil {
 		return []Error{{
 			Path:   blame(content, splices),
 			Reason: "invalid_xml",
@@ -194,7 +194,7 @@ func blame(content []byte, splices []splice) string {
 		buf.Write(content[:s.span.Start])
 		buf.Write(s.repl)
 		buf.Write(content[s.span.End:])
-		if _, err := wml.Scan(buf.Bytes()); err != nil {
+		if _, err := xmlscan.Scan(buf.Bytes()); err != nil {
 			return s.path
 		}
 	}
@@ -203,7 +203,7 @@ func blame(content []byte, splices []splice) string {
 
 // nearbyHint 는 경로를 못 찾았을 때 형제 개수를 알려준다.
 // 형태를 못 알아본 경로는 왜 힌트를 못 주는지 말한다 — 빈 detail 로 침묵하지 않는다.
-func nearbyHint(tree *wml.Tree, path string) string {
+func nearbyHint(tree *xmlscan.Tree, path string) string {
 	const shape = `경로 형태가 "부모/이름[n]" 이 아니라 형제 수를 셀 수 없다 (루트는 "word")`
 	i := strings.LastIndex(path, "/")
 	if i < 0 {

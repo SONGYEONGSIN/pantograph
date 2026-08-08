@@ -7,7 +7,7 @@ import (
 	"github.com/SONGYEONGSIN/pantograph/internal/dump"
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 // Extract 는 같은 양식 문서 N벌에서 템플릿과 스키마를 뽑는다.
@@ -26,13 +26,13 @@ func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patc
 		return nil, nil, nil, fmt.Errorf("문서 %d개에 이름 %d개", len(pkgs), len(names))
 	}
 
-	trees := make([]*wml.Tree, len(pkgs))
+	trees := make([]*xmlscan.Tree, len(pkgs))
 	for i, p := range pkgs {
 		content, err := p.Part(dump.ScannedPart)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		tr, err := wml.Scan(content)
+		tr, err := xmlscan.Scan(content)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("%s: %w", names[i], err)
 		}
@@ -94,7 +94,7 @@ func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patc
 }
 
 // diffStructure 는 두 트리의 경로 순열이 같은지 본다.
-func diffStructure(a, b *wml.Tree, an, bn string) *patch.Error {
+func diffStructure(a, b *xmlscan.Tree, an, bn string) *patch.Error {
 	n := len(a.Nodes)
 	if len(b.Nodes) < n {
 		n = len(b.Nodes)
@@ -124,7 +124,7 @@ func diffStructure(a, b *wml.Tree, an, bn string) *patch.Error {
 
 // diffMarkup 은 요소 자신의 마크업(타입 + 휘발성 제외 속성 + w:t 밖의 텍스트)이
 // 같은지 본다. 자손의 텍스트는 여기서 보지 않는다 — 그건 가변부 판별의 몫이다.
-func diffMarkup(bn wml.Node, trees []*wml.Tree, idx int, names []string) *patch.Error {
+func diffMarkup(bn xmlscan.Node, trees []*xmlscan.Tree, idx int, names []string) *patch.Error {
 	baseAttrs := stableAttrs(bn)
 	for i := 1; i < len(trees); i++ {
 		other := trees[i].Nodes[idx]
@@ -177,8 +177,8 @@ func diffMarkup(bn wml.Node, trees []*wml.Tree, idx int, names []string) *patch.
 }
 
 // stableAttrs 는 휘발성 속성을 뺀 속성 목록이다. 원문 순서를 유지한다.
-func stableAttrs(n wml.Node) []wml.Attr {
-	out := make([]wml.Attr, 0, len(n.Attrs))
+func stableAttrs(n xmlscan.Node) []xmlscan.Attr {
+	out := make([]xmlscan.Attr, 0, len(n.Attrs))
 	for _, a := range n.Attrs {
 		if isVolatile(a.Name) {
 			continue

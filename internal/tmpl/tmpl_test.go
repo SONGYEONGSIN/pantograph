@@ -8,7 +8,7 @@ import (
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/testutil"
 	"github.com/SONGYEONGSIN/pantograph/internal/tmpl"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 func pkgs(t *testing.T, forms ...[]string) ([]*opc.Package, []string) {
@@ -446,7 +446,7 @@ func textsOf(t *testing.T, p *opc.Package) []string {
 	if err != nil {
 		t.Fatalf("Part: %v", err)
 	}
-	tr, err := wml.Scan(c)
+	tr, err := xmlscan.Scan(c)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}

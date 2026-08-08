@@ -1,4 +1,4 @@
-package wml
+package xmlscan
 
 import (
 	"bytes"

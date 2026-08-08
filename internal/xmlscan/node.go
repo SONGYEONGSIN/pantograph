@@ -1,8 +1,8 @@
-// Package wml 은 WordprocessingML 을 스캔해 노드마다 경로와 바이트 범위를 부여한다.
+// Package xmlscan 은 WordprocessingML 을 스캔해 노드마다 경로와 바이트 범위를 부여한다.
 //
 // 이 패키지에는 재직렬화 함수가 없다. 의도적이다.
 // XML 트리를 바이트로 되돌리는 경로가 존재하면 무손실이 깨진다 (spec §2.1).
-package wml
+package xmlscan
 
 // Span 은 스캔 대상 바이트 슬라이스 내의 [Start, End) 구간이다.
 type Span struct {

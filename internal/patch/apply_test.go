@@ -442,7 +442,7 @@ func TestSetTextRejectsWhitespaceWithoutPreserve(t *testing.T) {
 
 func TestSetTextRejectsSelfClosingTarget(t *testing.T) {
 	// self-closing <w:t/> 는 시작/종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다.
-	// wml.Scan 의 Inner 는 이 경우 요소 바로 뒤의 폭 0 위치를 가리킨다.
+	// xmlscan.Scan 의 Inner 는 이 경우 요소 바로 뒤의 폭 0 위치를 가리킨다.
 	src := []byte(`<w:document xmlns:w="http://x"><w:body><w:p><w:r><w:t/></w:r></w:p></w:body></w:document>`)
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	if err := p.Replace("word/document.xml", src); err != nil {
