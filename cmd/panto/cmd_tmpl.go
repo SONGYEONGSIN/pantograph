@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -139,7 +140,9 @@ func cmdTmplFill(args []string) int {
 		return die(exitInternal, "%v", err)
 	}
 	var sch tmpl.Schema
-	if err := json.Unmarshal(sb, &sch); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(sb))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&sch); err != nil {
 		return die(exitInput, "스키마 JSON 파싱 실패: %v", err)
 	}
 	// keys 가 비어있으면 Fill 이 만드는 ops 도 비어있어 patch.Apply 가

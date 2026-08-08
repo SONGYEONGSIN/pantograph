@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 
@@ -43,7 +44,9 @@ func cmdApply(args []string) int {
 		return die(exitInternal, "%v", err)
 	}
 	var pt patch.Patch
-	if err := json.Unmarshal(pb, &pt); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(pb))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&pt); err != nil {
 		return die(exitInput, "패치 JSON 파싱 실패: %v", err)
 	}
 

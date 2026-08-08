@@ -1,8 +1,11 @@
 package parts_test
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
@@ -249,5 +252,69 @@ func TestPlanRejectsUnknownFormat(t *testing.T) {
 	}
 	if _, _, err := parts.Plan(p); err == nil {
 		t.Fatal("알려진 본문 파트가 없는데 에러가 없다")
+	}
+}
+
+// corruptPayload 는 zip 안 name 엔트리의 압축 데이터 마지막 바이트를 뒤집어
+// **컨테이너에 있지만 읽을 수 없는 파트**를 만든다.
+//
+// 중앙 디렉토리에서 크기와 로컬 헤더 위치를 읽는다 — archive/zip 은 deflate
+// 엔트리의 로컬 헤더에 크기를 0 으로 적고 데이터 디스크립터로 뒤에 붙이므로,
+// 로컬 헤더만 봐서는 페이로드 끝을 알 수 없다.
+func corruptPayload(t *testing.T, z []byte, name string) []byte {
+	t.Helper()
+	out := append([]byte(nil), z...)
+	for i := 0; i+46 <= len(out); i++ {
+		if !bytes.Equal(out[i:i+4], []byte("PK\x01\x02")) {
+			continue
+		}
+		nlen := int(binary.LittleEndian.Uint16(out[i+28:]))
+		if i+46+nlen > len(out) || string(out[i+46:i+46+nlen]) != name {
+			continue
+		}
+		csize := int(binary.LittleEndian.Uint32(out[i+20:]))
+		lho := int(binary.LittleEndian.Uint32(out[i+42:]))
+		data := lho + 30 + int(binary.LittleEndian.Uint16(out[lho+26:])) +
+			int(binary.LittleEndian.Uint16(out[lho+28:]))
+		if csize == 0 || data+csize > len(out) {
+			t.Fatalf("%s 의 페이로드 범위가 이상하다: data=%d csize=%d", name, data, csize)
+		}
+		out[data+csize-1] ^= 0xFF
+		return out
+	}
+	t.Fatalf("중앙 디렉토리에서 %s 를 못 찾았다", name)
+	return nil
+}
+
+// TestPlanDoesNotCallCorruptPartMissing 은 있지만 읽히지 않는 파트를
+// "없음" 이라고 부르지 않는지 본다.
+//
+// 거절 자체는 맞다 — 손상된 입력이지 도구의 고장이 아니므로 unsupported_format
+// (코드 1) 이 맞는 부류다. 틀린 것은 **사유**다: presentation.xml 이 멀쩡히
+// 자리에 있는데 "없음" 이라고 하면, 그 말을 믿고 파트를 추가하려는 에이전트는
+// 고칠 수 없는 것을 고치려 든다. 원인은 opc 가 이미 정확히 말하므로
+// (파트 없음 / crc 불일치) 여기서 원인을 단정하지 않는다.
+func TestPlanDoesNotCallCorruptPartMissing(t *testing.T) {
+	src := corruptPayload(t, pptxOf(
+		`<Override PartName="/ppt/slides/slide1.xml" ContentType="`+slideCT+`"/>`,
+		`<p:sldId id="1" r:id="rId1"/>`,
+		`<Relationship Id="rId1" Target="slides/slide1.xml"/>`,
+		map[string]string{"ppt/slides/slide1.xml": `<p:sld/>`}), "ppt/presentation.xml")
+
+	p, err := opc.OpenBytes(src)
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	_, ps, err := parts.Plan(p)
+	if err == nil {
+		t.Fatalf("읽히지 않는 presentation.xml 로 계획이 세워졌다: %+v", ps)
+	}
+	if !errors.Is(err, parts.ErrUnsupportedFormat) {
+		t.Fatalf("거절이 unsupported_format 부류가 아니다: %v", err)
+	}
+	// 이 컨테이너에는 presentation.xml 이 **있다** — 손상됐을 뿐이다.
+	// 그러므로 "없음" 이라는 말은 어느 형태로든 참일 수 없다.
+	if strings.Contains(err.Error(), "없음") {
+		t.Fatalf("있지만 읽히지 않는 파트를 없다고 한다: %v", err)
 	}
 }
