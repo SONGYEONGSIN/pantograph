@@ -4,6 +4,7 @@ package testutil
 import (
 	"archive/zip"
 	"bytes"
+	"sort"
 	"strings"
 	"time"
 )
@@ -68,6 +69,33 @@ func DocxWithBody(body string) []byte {
 			panic(err) // 테스트 헬퍼 — 여기서 실패하면 테스트 자체가 성립하지 않는다
 		}
 		if _, err := w.Write([]byte(e.content)); err != nil {
+			panic(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+// ZipOf 는 이름→내용 맵으로 결정론적 zip 을 만든다. Plan 의 거절 경로 시험용이다.
+// 맵 순회 순서가 새지 않도록 이름을 정렬해서 쓴다.
+func ZipOf(entries map[string]string) []byte {
+	names := make([]string, 0, len(entries))
+	for n := range entries {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, n := range names {
+		fh := &zip.FileHeader{Name: n, Method: zip.Deflate, Modified: fixedTime}
+		w, err := zw.CreateHeader(fh)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := w.Write([]byte(entries[n])); err != nil {
 			panic(err)
 		}
 	}
