@@ -922,7 +922,7 @@ git commit -m "feat: parts.Document — 지연 스캔과 파트 조회"
   - `dump.Dump{Doc Doc; ScannedParts []ScannedPart}`
   - `dump.Build(d *parts.Document, sels []string) (*Dump, error)`
   - `dump.Marshal(*Dump) ([]byte, error)`
-  - **`dump.ScannedPart` 상수는 사라진다**
+  - **`const ScannedPart = "word/document.xml"` 는 이 태스크에서 남겨둔다.** `dump` 는 더 이상 쓰지 않지만 `patch`·`tmpl` 이 아직 참조한다. Task 7 이 마지막 사용처를 걷어낸 뒤 지운다 — 그래야 **모든 커밋이 빌드되고 테스트가 통과**하고, 중간에 회귀가 생겼을 때 어느 태스크 탓인지 가릴 수 있다
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -1199,8 +1199,16 @@ func (d *Document) Names() []string { return d.pkg.Names() }
 
 - [ ] **Step 7: GREEN 확인**
 
-Run: `/opt/homebrew/bin/go test ./internal/dump/ ./internal/parts/ -v`
-Expected: 전부 PASS. `internal/patch`·`internal/tmpl` 은 아직 `dump.ScannedPart` 상수를 참조하므로 **컴파일이 깨진다** — Task 6·7 이 고친다. 이 태스크는 `dump`·`parts`·`xmlscan` 만 초록이면 된다.
+Run: `/opt/homebrew/bin/go test ./... -count=1`
+Expected: **전 패키지 PASS.** `ScannedPart` 상수를 남겨뒀으므로 `patch`·`tmpl` 은 그대로 컴파일된다. 이 태스크가 초록을 깨면 안 된다 — 깨진다면 상수를 지웠거나 `Node.Part` 추가가 무언가를 부순 것이다.
+
+`dump` 안에서 상수가 더 이상 쓰이지 않는지 확인한다:
+
+```bash
+grep -n 'ScannedPart' internal/dump/dump.go
+```
+
+`const ScannedPart` 선언 한 줄만 남아야 한다. `Build` 안에서 참조하면 교체가 덜 된 것이다.
 
 - [ ] **Step 8: 커밋**
 
@@ -1793,16 +1801,30 @@ type Key struct {
 
 `internal/tmpl/fill.go` 의 `Values` 와 `Fill` 이 `k.Part` 를 써서 노드를 찾고, 패치 op 에 `Part` 를 채운다. `template_drift`·`missing_key` 판정은 그대로다.
 
-- [ ] **Step 6: GREEN 확인**
+- [ ] **Step 6: `dump.ScannedPart` 상수 제거**
+
+`tmpl` 이 마지막 사용처였다. 이제 지운다:
+
+```bash
+grep -rn 'dump.ScannedPart\|ScannedPart =' --include='*.go' .
+```
+
+`internal/dump/dump.go` 의 `const ScannedPart = "word/document.xml"` 선언과 그 주석을 지운다. 남은 참조가 있으면 그것부터 걷어낸다. `dump.ScannedPart` **타입**(파트별 노드 묶음)은 남는다 — 이름이 같지만 다른 것이다.
+
+- [ ] **Step 7: GREEN 확인**
 
 Run: `/opt/homebrew/bin/go test ./... -count=1`
 Expected: 전 패키지 PASS. docx 템플릿 테스트(I4a 포함)가 그대로 통과해야 한다.
 
-- [ ] **Step 7: 커밋**
+```bash
+grep -rn 'const ScannedPart' --include='*.go' . || echo "상수 제거됨 ✓"
+```
+
+- [ ] **Step 8: 커밋**
 
 ```bash
-git add internal/tmpl
-git commit -m "feat: 템플릿을 파트 인식으로"
+git add internal/tmpl internal/dump
+git commit -m "feat: 템플릿을 파트 인식으로, ScannedPart 상수 제거"
 ```
 
 ---
