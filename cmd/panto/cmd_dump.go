@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/SONGYEONGSIN/pantograph/internal/dump"
+	"github.com/SONGYEONGSIN/pantograph/internal/parts"
 )
 
 func cmdDump(args []string) int {
@@ -12,9 +13,14 @@ func cmdDump(args []string) int {
 	if code != exitOK {
 		return code
 	}
-	// Build 는 word/document.xml 을 푼다 — 미지원 압축 방식이면 여기서
+	doc, err := parts.Open(p)
+	if err != nil {
+		return fail(args[0], err)
+	}
+	// Build 는 계획의 본문 파트를 전부 푼다 — 미지원 압축 방식이면 여기서
 	// UnsupportedError 가 난다. 열기 게이트를 통과한 뒤에도 나는 종류다.
-	d, err := dump.Build(p)
+	// 선택자(--part)는 Task 6 에서 더한다 — 지금은 항상 전체를 스캔한다.
+	d, err := dump.Build(doc, nil)
 	if err != nil {
 		return fail(args[0], err)
 	}

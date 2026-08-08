@@ -35,6 +35,11 @@ const XMLNS = "http://www.w3.org/XML/1998/namespace"
 //	      NS == "xmlns" 인 항목을 걸러야 한다
 //	Text  이 요소가 **직접** 품은 문자 데이터. 자손의 텍스트는 포함하지 않는다
 type Node struct {
+	// Part 는 이 노드가 속한 파트의 물리 경로다.
+	// Scan 은 파트를 모르므로 채우지 않는다 — parts.Document.Tree 가 채운다.
+	// JSON 에는 싣지 않는다: 덤프가 파트로 묶여 나가므로 묶음 머리에 이미 있다.
+	Part string `json:"-"`
+
 	Path  string `json:"path"`
 	Type  string `json:"type"`
 	Span  Span   `json:"span"`

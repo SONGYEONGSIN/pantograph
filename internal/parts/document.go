@@ -44,6 +44,12 @@ func Open(p *opc.Package) (*Document, error) {
 
 func (d *Document) Format() string { return d.format }
 
+// Hash 는 컨테이너 전체의 sha256 이다.
+func (d *Document) Hash() string { return d.pkg.Hash }
+
+// Names 는 컨테이너의 전 엔트리다 (스캔 대상만이 아니다).
+func (d *Document) Names() []string { return d.pkg.Names() }
+
 func (d *Document) Parts() []Part {
 	out := make([]Part, len(d.plan))
 	copy(out, d.plan)
@@ -67,6 +73,9 @@ func (d *Document) Tree(name string) (*xmlscan.Tree, error) {
 	t, err := xmlscan.Scan(content, pt.Root)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	for i := range t.Nodes {
+		t.Nodes[i].Part = name
 	}
 	d.trees[name] = t
 	d.order = append(d.order, name)
