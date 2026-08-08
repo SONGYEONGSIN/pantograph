@@ -315,7 +315,7 @@ func TestTmplFillReportsUnsupportedMethodAsInputError(t *testing.T) {
 	in := unsupportedMethodDocx(t, filepath.Join(dir, "t.docx"))
 	schemaPath := filepath.Join(dir, "schema.json")
 	if err := os.WriteFile(schemaPath,
-		[]byte(`{"base":"t.docx","keys":[{"key":"k1","path":"word/body[1]/p[1]/r[1]/t[1]"}]}`), 0o644); err != nil {
+		[]byte(`{"base":"t.docx","keys":[{"key":"k1","path":"document/body[1]/p[1]/r[1]/t[1]"}]}`), 0o644); err != nil {
 		t.Fatalf("스키마 파일 쓰기 실패: %v", err)
 	}
 	dataPath := filepath.Join(dir, "data.json")

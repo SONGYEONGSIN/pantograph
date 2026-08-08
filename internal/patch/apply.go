@@ -42,7 +42,7 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := xmlscan.Scan(content)
+	tree, err := xmlscan.Scan(content, "document")
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	// 결함은 전적으로 호출자가 준 XML 에 있으므로 입력 오류(코드 1)로 보고한다.
 	// 내부 오류(코드 2)로 보내면, 종료 코드로 재시도 여부를 판단하는 에이전트가
 	// "패치를 고쳐 다시 시도"가 아니라 "도구가 고장났으니 포기"로 잘못 분기한다 (spec §9).
-	if _, err := xmlscan.Scan(out); err != nil {
+	if _, err := xmlscan.Scan(out, "document"); err != nil {
 		return []Error{{
 			Path:   blame(content, splices),
 			Reason: "invalid_xml",
@@ -194,7 +194,7 @@ func blame(content []byte, splices []splice) string {
 		buf.Write(content[:s.span.Start])
 		buf.Write(s.repl)
 		buf.Write(content[s.span.End:])
-		if _, err := xmlscan.Scan(buf.Bytes()); err != nil {
+		if _, err := xmlscan.Scan(buf.Bytes(), "document"); err != nil {
 			return s.path
 		}
 	}

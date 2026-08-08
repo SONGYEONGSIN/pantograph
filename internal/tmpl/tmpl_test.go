@@ -46,7 +46,7 @@ func TestExtractFindsVariableParts(t *testing.T) {
 	if k.Key != "k1" {
 		t.Fatalf("키 이름 %q, 기대 %q", k.Key, "k1")
 	}
-	if k.Path != "word/body[1]/p[2]/r[1]/t[1]" {
+	if k.Path != "document/body[1]/p[2]/r[1]/t[1]" {
 		t.Fatalf("키 경로 %q", k.Path)
 	}
 	if len(k.Samples) != 2 || k.Samples[0] != "홍길동" || k.Samples[1] != "김철수" {
@@ -86,10 +86,10 @@ func TestExtractAssignsKeysInDocumentOrder(t *testing.T) {
 	if len(sch.Keys) != 2 {
 		t.Fatalf("키 %d개, 기대 2개", len(sch.Keys))
 	}
-	if sch.Keys[0].Key != "k1" || sch.Keys[0].Path != "word/body[1]/p[1]/r[1]/t[1]" {
+	if sch.Keys[0].Key != "k1" || sch.Keys[0].Path != "document/body[1]/p[1]/r[1]/t[1]" {
 		t.Fatalf("k1 이 문서 순서의 첫 가변부가 아니다: %+v", sch.Keys[0])
 	}
-	if sch.Keys[1].Key != "k2" || sch.Keys[1].Path != "word/body[1]/p[3]/r[1]/t[1]" {
+	if sch.Keys[1].Key != "k2" || sch.Keys[1].Path != "document/body[1]/p[3]/r[1]/t[1]" {
 		t.Fatalf("k2 가 부정확하다: %+v", sch.Keys[1])
 	}
 }
@@ -202,7 +202,7 @@ func TestExtractRejectsInstrTextDiff(t *testing.T) {
 	if len(errs) != 1 || errs[0].Reason != "nontext_diff" {
 		t.Fatalf("필드 명령의 차이가 거절되지 않았다: %+v", errs)
 	}
-	if errs[0].Path != "word/body[1]/p[1]/r[1]/instrText[1]" {
+	if errs[0].Path != "document/body[1]/p[1]/r[1]/instrText[1]" {
 		t.Fatalf("갈라진 경로를 정확히 지목하지 않았다: %+v", errs[0])
 	}
 }
@@ -217,7 +217,7 @@ func TestExtractAcceptsIdenticalInstrText(t *testing.T) {
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("같은 필드 명령인데 거절됐다: err=%v errs=%+v", err, errs)
 	}
-	if len(sch.Keys) != 1 || sch.Keys[0].Path != "word/body[1]/p[1]/r[2]/t[1]" {
+	if len(sch.Keys) != 1 || sch.Keys[0].Path != "document/body[1]/p[1]/r[2]/t[1]" {
 		t.Fatalf("w:t 의 차이가 가변부로 잡히지 않았다: %+v", sch.Keys)
 	}
 }
@@ -446,7 +446,7 @@ func textsOf(t *testing.T, p *opc.Package) []string {
 	if err != nil {
 		t.Fatalf("Part: %v", err)
 	}
-	tr, err := xmlscan.Scan(c)
+	tr, err := xmlscan.Scan(c, "document")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}

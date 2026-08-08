@@ -30,7 +30,7 @@ func Build(p *opc.Package) (*Dump, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := xmlscan.Scan(content)
+	tree, err := xmlscan.Scan(content, "document")
 	if err != nil {
 		return nil, err
 	}

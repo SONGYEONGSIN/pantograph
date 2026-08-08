@@ -32,7 +32,7 @@ func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patc
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		tr, err := xmlscan.Scan(content)
+		tr, err := xmlscan.Scan(content, "document")
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("%s: %w", names[i], err)
 		}

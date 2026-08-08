@@ -52,7 +52,7 @@ func TestReplaceRawSubstitutesNode(t *testing.T) {
 		Hash: p.Hash,
 		Ops: []patch.Op{{
 			Op:   "replaceRaw",
-			Path: "word/body[1]/p[1]",
+			Path: "document/body[1]/p[1]",
 			XML:  `<w:p><w:r><w:t>바뀐 제목</w:t></w:r></w:p>`,
 		}},
 	})
@@ -85,7 +85,7 @@ func TestLocalityUntouchedEntriesAreByteIdentical(t *testing.T) {
 
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p><w:r><w:t>X</w:t></w:r></w:p>`}},
+		Ops:  []patch.Op{{Op: "replaceRaw", Path: "document/body[1]/p[1]", XML: `<w:p><w:r><w:t>X</w:t></w:r></w:p>`}},
 	})
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
@@ -131,7 +131,7 @@ func TestLocalityReal(t *testing.T) {
 	// 첫 문단을 빈 문단으로 교체 — document.xml 만 dirty 가 된다.
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p/>`}},
+		Ops:  []patch.Op{{Op: "replaceRaw", Path: "document/body[1]/p[1]", XML: `<w:p/>`}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -161,8 +161,8 @@ func TestAtomicityNothingAppliedOnBadPath(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p><w:r><w:t>유효</w:t></w:r></w:p>`},
-			{Op: "replaceRaw", Path: "word/body[1]/p[99]", XML: `<w:p/>`},
+			{Op: "replaceRaw", Path: "document/body[1]/p[1]", XML: `<w:p><w:r><w:t>유효</w:t></w:r></w:p>`},
+			{Op: "replaceRaw", Path: "document/body[1]/p[99]", XML: `<w:p/>`},
 		},
 	})
 	if err != nil {
@@ -171,7 +171,7 @@ func TestAtomicityNothingAppliedOnBadPath(t *testing.T) {
 	if len(errs) != 1 {
 		t.Fatalf("에러 %d개, 기대 1개: %+v", len(errs), errs)
 	}
-	if errs[0].Path != "word/body[1]/p[99]" || errs[0].Reason != "path_not_found" {
+	if errs[0].Path != "document/body[1]/p[99]" || errs[0].Reason != "path_not_found" {
 		t.Fatalf("에러가 부정확하다: %+v", errs[0])
 	}
 	got, err := p.Bytes()
@@ -187,7 +187,7 @@ func TestHashMismatchRejected(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-		Ops:  []patch.Op{{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p/>`}},
+		Ops:  []patch.Op{{Op: "replaceRaw", Path: "document/body[1]/p[1]", XML: `<w:p/>`}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -202,8 +202,8 @@ func TestOverlapRejected(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p/>`},
-			{Op: "replaceRaw", Path: "word/body[1]/p[1]/r[1]", XML: `<w:r/>`}, // p[1] 안쪽
+			{Op: "replaceRaw", Path: "document/body[1]/p[1]", XML: `<w:p/>`},
+			{Op: "replaceRaw", Path: "document/body[1]/p[1]/r[1]", XML: `<w:r/>`}, // p[1] 안쪽
 		},
 	})
 	if err != nil {
@@ -218,7 +218,7 @@ func TestUnknownOpRejected(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setProps", Path: "word/body[1]/p[1]"}},
+		Ops:  []patch.Op{{Op: "setProps", Path: "document/body[1]/p[1]"}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -238,7 +238,7 @@ func TestBrokenXMLIsInputError(t *testing.T) {
 	p := open(t, src)
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p><w:r>`}},
+		Ops:  []patch.Op{{Op: "replaceRaw", Path: "document/body[1]/p[1]", XML: `<w:p><w:r>`}},
 	})
 	if err != nil {
 		t.Fatalf("깨진 XML 이 내부 오류로 보고됐다: %v", err)
@@ -246,7 +246,7 @@ func TestBrokenXMLIsInputError(t *testing.T) {
 	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
 		t.Fatalf("invalid_xml 로 거절되지 않았다: %+v", errs)
 	}
-	if errs[0].Path != "word/body[1]/p[1]" {
+	if errs[0].Path != "document/body[1]/p[1]" {
 		t.Fatalf("문제를 일으킨 op 의 경로를 달지 않았다: %+v", errs[0])
 	}
 	// 거절이면 문서는 손대지 않은 상태여야 한다.
@@ -266,9 +266,9 @@ func TestBrokenXMLBlamesTheOffendingOp(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "replaceRaw", Path: "word/body[1]/p[1]", XML: `<w:p><w:r><w:t>정상</w:t></w:r></w:p>`},
-			{Op: "replaceRaw", Path: "word/body[1]/p[2]", XML: `<w:p><w:r>`}, // 여기가 장본인
-			{Op: "replaceRaw", Path: "word/body[1]/p[3]", XML: `<w:p/>`},
+			{Op: "replaceRaw", Path: "document/body[1]/p[1]", XML: `<w:p><w:r><w:t>정상</w:t></w:r></w:p>`},
+			{Op: "replaceRaw", Path: "document/body[1]/p[2]", XML: `<w:p><w:r>`}, // 여기가 장본인
+			{Op: "replaceRaw", Path: "document/body[1]/p[3]", XML: `<w:p/>`},
 		},
 	})
 	if err != nil {
@@ -277,7 +277,7 @@ func TestBrokenXMLBlamesTheOffendingOp(t *testing.T) {
 	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
 		t.Fatalf("invalid_xml 로 거절되지 않았다: %+v", errs)
 	}
-	if errs[0].Path != "word/body[1]/p[2]" {
+	if errs[0].Path != "document/body[1]/p[2]" {
 		t.Fatalf("장본인이 아닌 경로를 지목했다: %+v", errs[0])
 	}
 }
@@ -292,8 +292,8 @@ func TestDuplicatePathRejectedOnEmptyTarget(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "AAA"},
-			{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "BBB"},
+			{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "AAA"},
+			{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "BBB"},
 		},
 	})
 	if err != nil {
@@ -302,7 +302,7 @@ func TestDuplicatePathRejectedOnEmptyTarget(t *testing.T) {
 	if len(errs) != 1 || errs[0].Reason != "duplicate_path" {
 		t.Fatalf("같은 경로 중복이 거절되지 않았다: %+v", errs)
 	}
-	if errs[0].Path != "word/body[1]/p[1]/r[1]/t[1]" {
+	if errs[0].Path != "document/body[1]/p[1]/r[1]/t[1]" {
 		t.Fatalf("에러가 중복된 경로를 지목하지 않는다: %+v", errs[0])
 	}
 	content, err := p.Part("word/document.xml")
@@ -321,8 +321,8 @@ func TestDuplicatePathRejectedOnNonEmptyTarget(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "AAA"},
-			{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "BBB"},
+			{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "AAA"},
+			{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "BBB"},
 		},
 	})
 	if err != nil {
@@ -340,7 +340,7 @@ func TestSetTextRejectsSpaceAttrInOtherNamespace(t *testing.T) {
 	p := open(t, testutil.DocxWithBody(`<w:p><w:r><w:t w:space="preserve">제목</w:t></w:r></w:p>`))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+		Ops:  []patch.Op{{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -372,7 +372,7 @@ func TestSetTextReplacesOnlyInnerText(t *testing.T) {
 
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "새 제목"}},
+		Ops:  []patch.Op{{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "새 제목"}},
 	})
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
@@ -393,7 +393,7 @@ func TestSetTextEscapesMinimally(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "a&b<c>d\ne"}},
+		Ops:  []patch.Op{{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "a&b<c>d\ne"}},
 	})
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
@@ -411,7 +411,7 @@ func TestSetTextRejectsNonTextNode(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]", Text: "X"}},
+		Ops:  []patch.Op{{Op: "setText", Path: "document/body[1]/p[1]", Text: "X"}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -430,7 +430,7 @@ func TestSetTextRejectsWhitespaceWithoutPreserve(t *testing.T) {
 	}
 
 	errs, err := patch.Apply(p, patch.Patch{
-		Ops: []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+		Ops: []patch.Op{{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -455,7 +455,7 @@ func TestSetTextRejectsSelfClosingTarget(t *testing.T) {
 	beforeCopy := append([]byte(nil), before...)
 
 	errs, err := patch.Apply(p, patch.Patch{
-		Ops: []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: "새 텍스트"}},
+		Ops: []patch.Op{{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "새 텍스트"}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -476,7 +476,7 @@ func TestSetTextAllowsWhitespaceWithPreserve(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"})) // 생성기가 preserve 를 붙인다
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Path: "word/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+		Ops:  []patch.Op{{Op: "setText", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
 	})
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("preserve 가 있는데 거절됐다: err=%v errs=%+v", err, errs)

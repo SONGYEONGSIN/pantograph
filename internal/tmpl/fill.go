@@ -19,7 +19,7 @@ func Values(p *opc.Package, sch *Schema) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := xmlscan.Scan(content)
+	tree, err := xmlscan.Scan(content, "document")
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func Fill(tp *opc.Package, sch *Schema, data map[string]string) ([]patch.Error, 
 	if err != nil {
 		return nil, err
 	}
-	tree, err := xmlscan.Scan(content)
+	tree, err := xmlscan.Scan(content, "document")
 	if err != nil {
 		return nil, err
 	}
