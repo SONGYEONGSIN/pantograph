@@ -47,8 +47,9 @@ func cmdApply(args []string) int {
 		return die(exitInput, "패치 JSON 파싱 실패: %v", err)
 	}
 
-	// Apply 는 op 이 없어도 word/document.xml 을 풀어 스캔한다 —
-	// 미지원 압축 방식이면 여기서 UnsupportedError 가 난다.
+	// Apply 는 op 이 지목한 파트만 지연 스캔한다 (Task 6) — 빈 패치는 아무
+	// 파트도 스캔하지 않는다. 스캔된 파트가 미지원 압축 방식이면 여기서
+	// UnsupportedError 가 난다.
 	errs, err := patch.Apply(p, pt)
 	if err != nil {
 		return fail(in, err)

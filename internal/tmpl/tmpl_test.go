@@ -3,12 +3,13 @@ package tmpl_test
 import (
 	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/testutil"
 	"github.com/SONGYEONGSIN/pantograph/internal/tmpl"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 func pkgs(t *testing.T, forms ...[]string) ([]*opc.Package, []string) {
@@ -46,7 +47,10 @@ func TestExtractFindsVariableParts(t *testing.T) {
 	if k.Key != "k1" {
 		t.Fatalf("키 이름 %q, 기대 %q", k.Key, "k1")
 	}
-	if k.Path != "word/body[1]/p[2]/r[1]/t[1]" {
+	if k.Part != "word/document.xml" {
+		t.Fatalf("키 파트 %q, 기대 %q", k.Part, "word/document.xml")
+	}
+	if k.Path != "document/body[1]/p[2]/r[1]/t[1]" {
 		t.Fatalf("키 경로 %q", k.Path)
 	}
 	if len(k.Samples) != 2 || k.Samples[0] != "홍길동" || k.Samples[1] != "김철수" {
@@ -86,10 +90,10 @@ func TestExtractAssignsKeysInDocumentOrder(t *testing.T) {
 	if len(sch.Keys) != 2 {
 		t.Fatalf("키 %d개, 기대 2개", len(sch.Keys))
 	}
-	if sch.Keys[0].Key != "k1" || sch.Keys[0].Path != "word/body[1]/p[1]/r[1]/t[1]" {
+	if sch.Keys[0].Key != "k1" || sch.Keys[0].Part != "word/document.xml" || sch.Keys[0].Path != "document/body[1]/p[1]/r[1]/t[1]" {
 		t.Fatalf("k1 이 문서 순서의 첫 가변부가 아니다: %+v", sch.Keys[0])
 	}
-	if sch.Keys[1].Key != "k2" || sch.Keys[1].Path != "word/body[1]/p[3]/r[1]/t[1]" {
+	if sch.Keys[1].Key != "k2" || sch.Keys[1].Part != "word/document.xml" || sch.Keys[1].Path != "document/body[1]/p[3]/r[1]/t[1]" {
 		t.Fatalf("k2 가 부정확하다: %+v", sch.Keys[1])
 	}
 }
@@ -108,6 +112,26 @@ func TestExtractRejectsStructureMismatch(t *testing.T) {
 	}
 	if errs[0].Path == "" {
 		t.Fatal("갈라진 경로를 지목하지 않았다")
+	}
+}
+
+// TestExtractRejectsPartSetMismatch 는 포맷이 다른(파트 집합이 다른) 문서 쌍이
+// 노드 비교까지 가지 않고 파트 집합 단계에서 거절되는지 본다.
+func TestExtractRejectsPartSetMismatch(t *testing.T) {
+	a, err := opc.OpenBytes(testutil.MinimalDocx([]string{"고정", "A"}))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	b, err := opc.Open(filepath.Join("..", "..", "testdata", "real", "deck-a.pptx"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "deck.pptx"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "structure_mismatch" {
+		t.Fatalf("포맷이 다른 문서가 거절되지 않았다: %+v", errs)
 	}
 }
 
@@ -202,7 +226,7 @@ func TestExtractRejectsInstrTextDiff(t *testing.T) {
 	if len(errs) != 1 || errs[0].Reason != "nontext_diff" {
 		t.Fatalf("필드 명령의 차이가 거절되지 않았다: %+v", errs)
 	}
-	if errs[0].Path != "word/body[1]/p[1]/r[1]/instrText[1]" {
+	if errs[0].Path != "document/body[1]/p[1]/r[1]/instrText[1]" {
 		t.Fatalf("갈라진 경로를 정확히 지목하지 않았다: %+v", errs[0])
 	}
 }
@@ -217,7 +241,7 @@ func TestExtractAcceptsIdenticalInstrText(t *testing.T) {
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("같은 필드 명령인데 거절됐다: err=%v errs=%+v", err, errs)
 	}
-	if len(sch.Keys) != 1 || sch.Keys[0].Path != "word/body[1]/p[1]/r[2]/t[1]" {
+	if len(sch.Keys) != 1 || sch.Keys[0].Path != "document/body[1]/p[1]/r[2]/t[1]" {
 		t.Fatalf("w:t 의 차이가 가변부로 잡히지 않았다: %+v", sch.Keys)
 	}
 }
@@ -246,6 +270,34 @@ func TestExtractRejectsIndentationDiff(t *testing.T) {
 	}
 	if len(errs) != 1 || errs[0].Reason != "nontext_diff" {
 		t.Fatalf("들여쓰기가 다른 문서가 거절되지 않았다 (거절이 기대 동작이다): %+v", errs)
+	}
+}
+
+// TestNontextDiffDetailNamesNoFormatElement 는 nontext_diff 문구가 특정 포맷의
+// 요소 이름을 박아넣지 않는지 본다 (patch 의 setText 거절 문구와 같은 부류).
+//
+// "w:t 밖의 텍스트가 다르다"는 pptx 를 비교할 때 거짓이다 — 슬라이드의 텍스트
+// 요소는 `a:t` 다. 이 검사의 규칙은 "Word 의 w:t 밖"이 아니라 "가변부로 다루지
+// 않는 요소의 직접 텍스트"이므로, 문구는 손에 든 노드의 Type 을 말해야 한다.
+func TestNontextDiffDetailNamesNoFormatElement(t *testing.T) {
+	a := fieldDoc(t, "MERGEFIELD Name", "홍길동")
+	b := fieldDoc(t, "MERGEFIELD Company", "김철수")
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "nontext_diff" {
+		t.Fatalf("기대한 사유로 거절되지 않았다: %+v", errs)
+	}
+	detail := errs[0].Detail
+	if detail == "" {
+		t.Fatal("Detail 이 비어있다")
+	}
+	for _, lit := range []string{"w:t", "a:t"} {
+		if strings.Contains(detail, lit) {
+			t.Fatalf("Detail 이 포맷 특정 요소 이름을 박아넣었다: %q (%s 포함)", detail, lit)
+		}
 	}
 }
 
@@ -355,6 +407,70 @@ func TestTemplateReversalReal(t *testing.T) {
 	}
 }
 
+// I4a — 실제 PowerPoint 문서. 픽스처가 없으면 FAIL 이다. skip 으로 바꾸지 말 것 (spec §10).
+//
+// TestTemplateReversalReal 은 docx 만 본다. Task 7 리뷰에서 남은 finding —
+// tmpl.Extract 의 키 번호가 파트를 가로질러 이어지는지 시험하는 테스트가
+// 없었다: 지금까지 Extract 의 키 루프에 닿는 모든 테스트가 파트 하나짜리
+// docx 를 썼으므로, 파트별 루프가 정확히 한 번만 돌아 예전 단일 파트
+// 코드와 구별이 안 됐다. deck-a·deck-b 는 슬라이드 3장 각각에서 제목이
+// 갈리므로, 여기서 잡히는 키가 파트 여러 개에 걸쳐 있어야만 이 시험이
+// 다중 파트를 실제로 건드린 것이다.
+func TestPptxTemplateReversalReal(t *testing.T) {
+	var ps []*opc.Package
+	var names []string
+	for _, n := range []string{"deck-a.pptx", "deck-b.pptx"} {
+		p, err := opc.Open(filepath.Join("..", "..", "testdata", "real", n))
+		if err != nil {
+			t.Fatalf("Open %s: %v", n, err)
+		}
+		ps = append(ps, p)
+		names = append(names, n)
+	}
+
+	tp, sch, errs, err := tmpl.Extract(ps, names)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+	if len(sch.Keys) == 0 {
+		t.Fatal("가변부가 하나도 안 잡혔다")
+	}
+	// 키가 여러 파트에 걸쳐 있어야 다중 파트 템플릿을 시험한 것이다
+	seen := map[string]bool{}
+	for _, k := range sch.Keys {
+		seen[k.Part] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("키가 파트 %d개에만 있다 — 다중 파트를 시험하지 못했다", len(seen))
+	}
+
+	vals, err := tmpl.Values(ps[0], sch)
+	if err != nil {
+		t.Fatalf("Values: %v", err)
+	}
+	filled, err := opc.OpenBytes(mustBytes(t, tp))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	if fe, err := tmpl.Fill(filled, sch, vals); err != nil || len(fe) != 0 {
+		t.Fatalf("Fill: err=%v errs=%+v", err, fe)
+	}
+
+	for _, k := range sch.Keys {
+		want, err := ps[0].Part(k.Part)
+		if err != nil {
+			t.Fatalf("Part: %v", err)
+		}
+		got, err := filled.Part(k.Part)
+		if err != nil {
+			t.Fatalf("Part: %v", err)
+		}
+		if !bytes.Equal(want, got) {
+			t.Fatalf("I4a 위반 — %s 가 원본과 다르다", k.Part)
+		}
+	}
+}
+
 // I4b — 나머지 문서에 대한 텍스트 수준 일치
 func TestTemplateReversalOthersTextLevel(t *testing.T) {
 	ps, names := pkgs(t,
@@ -446,7 +562,7 @@ func textsOf(t *testing.T, p *opc.Package) []string {
 	if err != nil {
 		t.Fatalf("Part: %v", err)
 	}
-	tr, err := wml.Scan(c)
+	tr, err := xmlscan.Scan(c, "document")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}

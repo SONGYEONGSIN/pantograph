@@ -1,11 +1,11 @@
-package wml_test
+package xmlscan_test
 
 import (
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/testutil"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 func docXML(t *testing.T, paragraphs []string) []byte {
@@ -22,17 +22,17 @@ func docXML(t *testing.T, paragraphs []string) []byte {
 }
 
 func TestScanAssignsPaths(t *testing.T) {
-	tree, err := wml.Scan(docXML(t, []string{"제목", "본문"}))
+	tree, err := xmlscan.Scan(docXML(t, []string{"제목", "본문"}), "document")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
 	for _, want := range []string{
-		"word",
-		"word/body[1]",
-		"word/body[1]/p[1]",
-		"word/body[1]/p[1]/r[1]",
-		"word/body[1]/p[1]/r[1]/t[1]",
-		"word/body[1]/p[2]/r[1]/t[1]",
+		"document",
+		"document/body[1]",
+		"document/body[1]/p[1]",
+		"document/body[1]/p[1]/r[1]",
+		"document/body[1]/p[1]/r[1]/t[1]",
+		"document/body[1]/p[2]/r[1]/t[1]",
 	} {
 		if _, ok := tree.Lookup(want); !ok {
 			t.Errorf("경로 없음: %s", want)
@@ -42,13 +42,13 @@ func TestScanAssignsPaths(t *testing.T) {
 
 func TestScanSpanIsExactOriginalBytes(t *testing.T) {
 	src := docXML(t, []string{"제목"})
-	tree, err := wml.Scan(src)
+	tree, err := xmlscan.Scan(src, "document")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	n, ok := tree.Lookup("word/body[1]/p[1]")
+	n, ok := tree.Lookup("document/body[1]/p[1]")
 	if !ok {
-		t.Fatal("word/body[1]/p[1] 없음")
+		t.Fatal("document/body[1]/p[1] 없음")
 	}
 	got := string(tree.Raw(n))
 	want := `<w:p w14:paraId="00000001"><w:r><w:t xml:space="preserve">제목</w:t></w:r></w:p>`
@@ -59,11 +59,11 @@ func TestScanSpanIsExactOriginalBytes(t *testing.T) {
 
 func TestScanInnerExcludesTags(t *testing.T) {
 	src := docXML(t, []string{"제목"})
-	tree, err := wml.Scan(src)
+	tree, err := xmlscan.Scan(src, "document")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	n, ok := tree.Lookup("word/body[1]/p[1]/r[1]/t[1]")
+	n, ok := tree.Lookup("document/body[1]/p[1]/r[1]/t[1]")
 	if !ok {
 		t.Fatal("t[1] 없음")
 	}
@@ -77,11 +77,11 @@ func TestScanInnerExcludesTags(t *testing.T) {
 
 func TestScanSelfClosingElementHasEmptyInner(t *testing.T) {
 	src := []byte(`<w:document xmlns:w="http://x"><w:body><w:p><w:pPr><w:b/></w:pPr></w:p></w:body></w:document>`)
-	tree, err := wml.Scan(src)
+	tree, err := xmlscan.Scan(src, "document")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	n, ok := tree.Lookup("word/body[1]/p[1]/pPr[1]/b[1]")
+	n, ok := tree.Lookup("document/body[1]/p[1]/pPr[1]/b[1]")
 	if !ok {
 		t.Fatal("b[1] 없음")
 	}
@@ -95,11 +95,11 @@ func TestScanSelfClosingElementHasEmptyInner(t *testing.T) {
 
 func TestScanAttrsPreserveSourceOrder(t *testing.T) {
 	src := []byte(`<w:document xmlns:w="http://x" xmlns:w14="http://y"><w:body><w:p w14:paraId="AA" w14:textId="BB"/></w:body></w:document>`)
-	tree, err := wml.Scan(src)
+	tree, err := xmlscan.Scan(src, "document")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	n, ok := tree.Lookup("word/body[1]/p[1]")
+	n, ok := tree.Lookup("document/body[1]/p[1]")
 	if !ok {
 		t.Fatal("p[1] 없음")
 	}
@@ -115,11 +115,11 @@ func TestScanAttrsPreserveSourceOrder(t *testing.T) {
 }
 
 func TestScanNodesArePreOrder(t *testing.T) {
-	tree, err := wml.Scan(docXML(t, []string{"제목"}))
+	tree, err := xmlscan.Scan(docXML(t, []string{"제목"}), "document")
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	want := []string{"word", "word/body[1]", "word/body[1]/p[1]", "word/body[1]/p[1]/r[1]", "word/body[1]/p[1]/r[1]/t[1]"}
+	want := []string{"document", "document/body[1]", "document/body[1]/p[1]", "document/body[1]/p[1]/r[1]", "document/body[1]/p[1]/r[1]/t[1]"}
 	if len(tree.Nodes) != len(want) {
 		t.Fatalf("노드 %d개, 기대 %d개", len(tree.Nodes), len(want))
 	}
@@ -135,8 +135,32 @@ func TestScanNodesArePreOrder(t *testing.T) {
 // "닫히지 않은 요소" 분기까지 가지 않는다. 이름이 그 분기를 검증한다고
 // 주장하지 않도록 일반적인 파싱 거절로 부른다.
 func TestScanRejectsMalformedXML(t *testing.T) {
-	_, err := wml.Scan([]byte(`<w:document xmlns:w="http://x"><w:body></w:document>`))
+	_, err := xmlscan.Scan([]byte(`<w:document xmlns:w="http://x"><w:body></w:document>`), "document")
 	if err == nil {
 		t.Fatal("well-formed 가 아닌 XML 인데 에러가 없다")
+	}
+}
+
+func TestScanUsesInjectedRootAlias(t *testing.T) {
+	src := docXML(t, []string{"제목"})
+
+	tree, err := xmlscan.Scan(src, "document")
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if _, ok := tree.Lookup("document/body[1]/p[1]"); !ok {
+		t.Error("document/body[1]/p[1] 없음")
+	}
+	if _, ok := tree.Lookup("word/body[1]/p[1]"); ok {
+		t.Error("옛 루트 별칭 word 가 여전히 붙는다")
+	}
+
+	// 별칭은 주입값 그대로다 — 루트 요소의 로컬명과 무관하게
+	tree2, err := xmlscan.Scan(src, "sld")
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if _, ok := tree2.Lookup("sld/body[1]/p[1]"); !ok {
+		t.Error("sld/body[1]/p[1] 없음 — 별칭이 주입되지 않았다")
 	}
 }

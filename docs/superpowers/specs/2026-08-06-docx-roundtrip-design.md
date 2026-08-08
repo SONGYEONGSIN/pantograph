@@ -157,10 +157,14 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 
 **경로 부여 규칙** — I3(결정성)의 근거:
 
-- 인덱스는 *같은 부모 아래 같은 로컬명* 기준 1-base: `word/body[1]/p[3]/r[1]/t[1]`
+- 인덱스는 *같은 부모 아래 같은 로컬명* 기준 1-base: `document/body[1]/p[3]/r[1]/t[1]`
 - 인덱스를 **항상** 붙인다. 형제가 하나일 때 생략하는 규칙은 문서를 끝까지 읽어야
   결정되므로 단일 패스 스캔이 불가능하고, 형제가 하나 늘면 기존 경로가 바뀌어
   경로 안정성도 깨진다
+- 경로 맨 앞의 `document`는 하드코딩된 상수가 아니라 **루트 별칭**이다 — 스캐너가
+  파트마다 주입받는다(이 슬라이스는 파트가 하나뿐이라 `document` 고정으로 보일
+  뿐). 여러 파트·포맷으로 일반화된 별칭 규칙은
+  [`2026-08-08-multipart-design.md`](2026-08-08-multipart-design.md) §3 참조
 - 순수 함수. 난수·시각 없음
 - **속성은 정렬된 슬라이스로 낸다.** Go 맵 순회 순서가 랜덤이라 `map[string]string`을 그대로 JSON으로 내면 I3가 깨진다. 타입 수준에서 막는다
 
@@ -175,14 +179,14 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
     "scannedPart": "word/document.xml"
   },
   "nodes": [
-    { "path": "word/body[1]/p[1]", "type": "p",
+    { "path": "document/body[1]/p[1]", "type": "p",
       "span":  {"start": 301, "end": 383},
       "inner": {"start": 328, "end": 377},
       "attrs": [
         {"name":"paraId", "ns":"http://schemas.microsoft.com/office/word/2010/wordml",
          "value":"00000001"}
       ] },
-    { "path": "word/body[1]/p[1]/r[1]/t[1]", "type": "t",
+    { "path": "document/body[1]/p[1]/r[1]/t[1]", "type": "t",
       "span":  {"start": 333, "end": 371},
       "inner": {"start": 359, "end": 365},
       "attrs": [
@@ -226,8 +230,8 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 {
   "hash": "sha256:…",
   "ops": [
-    {"op":"setText",    "path":"word/body[1]/p[1]/r[1]/t[1]", "text":"새 제목"},
-    {"op":"replaceRaw", "path":"word/body[1]/tbl[1]",         "xml":"<w:tbl>…</w:tbl>"}
+    {"op":"setText",    "path":"document/body[1]/p[1]/r[1]/t[1]", "text":"새 제목"},
+    {"op":"replaceRaw", "path":"document/body[1]/tbl[1]",         "xml":"<w:tbl>…</w:tbl>"}
   ]
 }
 ```
@@ -262,8 +266,8 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 ```json
 { "base": "invoice-2024-01.docx", "hash": "sha256:…",
   "keys": [
-    {"key":"k1", "path":"word/body[1]/p[2]/r[1]/t[1]", "samples":["홍길동","김철수"]},
-    {"key":"k2", "path":"word/body[1]/tbl[1]/tr[2]/tc[3]/p[1]/r[1]/t[1]", "samples":["1,200,000","880,000"]}
+    {"key":"k1", "path":"document/body[1]/p[2]/r[1]/t[1]", "samples":["홍길동","김철수"]},
+    {"key":"k2", "path":"document/body[1]/tbl[1]/tr[2]/tc[3]/p[1]/r[1]/t[1]", "samples":["1,200,000","880,000"]}
   ]}
 ```
 
@@ -285,7 +289,7 @@ opc.Open → 엔트리 목록(순서·헤더 보존)
 
 ```json
 {"ok": false, "errors": [
-  {"path":"word/body[1]/p[99]", "reason":"path_not_found", "detail":"body에 w:p는 12개"}
+  {"path":"document/body[1]/p[99]", "reason":"path_not_found", "detail":"body에 w:p는 12개"}
 ]}
 ```
 

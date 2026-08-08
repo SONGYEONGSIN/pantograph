@@ -62,7 +62,8 @@ func cmdTmplExtract(args []string) int {
 		names[i] = filepath.Base(in)
 	}
 
-	// Extract 는 입력 전부의 word/document.xml 을 푼다. 어느 문서가 문제인지는
+	// Extract 는 입력 전부의 본문 파트를 파트 인식으로 순회한다(docx 는
+	// word/document.xml 하나, pptx 는 슬라이드마다). 어느 문서가 문제인지는
 	// 에러에서 되짚을 수 없으므로 입력 목록 전체를 경로로 단다 — Detail 이
 	// 문제의 엔트리 이름을 갖고 있다.
 	tp, sch, errs, err := tmpl.Extract(pkgs, names)
@@ -157,8 +158,9 @@ func cmdTmplFill(args []string) int {
 		return die(exitInput, "데이터 JSON 파싱 실패: %v", err)
 	}
 
-	// Fill 은 템플릿의 word/document.xml 을 푼다 — 미지원 압축 방식이면 여기서
-	// UnsupportedError 가 난다.
+	// Fill 은 템플릿의 본문 파트를 파트 인식으로 푼다(docx 는 word/document.xml
+	// 하나, pptx 는 슬라이드마다) — 미지원 압축 방식이면 여기서 UnsupportedError
+	// 가 난다.
 	errs, err := tmpl.Fill(tp, &sch, data)
 	if err != nil {
 		return fail(in, err)

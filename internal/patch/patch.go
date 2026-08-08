@@ -5,8 +5,11 @@
 package patch
 
 // Op 는 패치 연산 하나다. 이번 슬라이스의 연산은 setText 와 replaceRaw 둘뿐이다.
+// Part 는 물리 파트 경로("ppt/slides/slide1.xml") 또는 논리 참조("pptx/slide[1]")다.
+// 비어 있으면 본문 파트가 하나인 문서에 한해 그것으로 간주한다 — docx 하위호환.
 type Op struct {
 	Op   string `json:"op"`
+	Part string `json:"part,omitempty"`
 	Path string `json:"path"`
 	Text string `json:"text,omitempty"` // setText
 	XML  string `json:"xml,omitempty"`  // replaceRaw

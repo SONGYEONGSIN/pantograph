@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/SONGYEONGSIN/pantograph/internal/dump"
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
-	"github.com/SONGYEONGSIN/pantograph/internal/wml"
+	"github.com/SONGYEONGSIN/pantograph/internal/parts"
+	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
 
 // xmlEscaper 는 텍스트 노드에서 의미를 갖는 세 글자만 이스케이프한다.
@@ -18,40 +18,133 @@ import (
 var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 type splice struct {
-	span wml.Span
+	span xmlscan.Span
 	repl []byte
 	path string
 }
 
-// Apply 는 패치를 적용한다.
+// pending 은 검증까지 통과했지만 아직 쓰지 않은 파트 버퍼 하나다.
+type pending struct {
+	name string
+	out  []byte
+}
+
+// Apply 는 패치를 적용한다. 파트가 여럿이어도 전부 적용되거나 전무다.
 //
 // 반환된 []Error 가 비어있지 않으면 패키지는 **손대지 않은 상태**다.
-// error 는 보통 내부 오류(종료 코드 2)이지만, *opc.UnsupportedError 일 수도 있다 —
-// scannedPart 를 풀 때 미지원 압축 방식을 만나면 난다. CLI 는 이를 코드 1
-// (unsupported_container)로 매핑한다. 어느 경우든 패키지는 수정되지 않는다.
+// error 는 보통 내부 오류(종료 코드 2)이지만, 입력 부류일 수도 있다 —
+// *opc.UnsupportedError(파트를 풀 때 만난 미지원 압축 방식)와
+// parts.ErrUnsupportedFormat(Plan 의 모든 실패)이 그렇다. 그 둘을 reason 으로
+// 옮기는 것은 CLI 의 분류기 한 곳이 맡는다 — 여기서 따로 매핑하면 같은 오류에
+// 두 표가 생긴다. 어느 경우든 패키지는 수정되지 않는다.
 func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	if pt.Hash != "" && pt.Hash != p.Hash {
-		return []Error{{
-			Path:   dump.ScannedPart,
-			Reason: "hash_mismatch",
-			Detail: fmt.Sprintf("패치 hash=%s, 문서 hash=%s", pt.Hash, p.Hash),
-		}}, nil
+		return []Error{{Reason: "hash_mismatch",
+			Detail: fmt.Sprintf("패치 hash=%s, 문서 hash=%s", pt.Hash, p.Hash)}}, nil
 	}
 
-	content, err := p.Part(dump.ScannedPart)
+	doc, err := parts.Open(p)
 	if err != nil {
 		return nil, err
 	}
-	tree, err := wml.Scan(content)
+
+	buffers, errs, err := resolveAndBuffer(doc, pt.Ops)
 	if err != nil {
 		return nil, err
 	}
+	if len(errs) > 0 {
+		return errs, nil
+	}
+	if len(buffers) == 0 {
+		return nil, nil // 빈 패치 — 아무것도 건드리지 않는다 (I1)
+	}
+
+	// 모든 버퍼를 검증한 뒤에야 쓴다.
+	// 파트 A 만 Replace 하고 B 가 깨지면 문서가 반쯤 바뀐다.
+	for _, b := range buffers {
+		if err := p.Replace(b.name, b.out); err != nil {
+			return nil, err
+		}
+	}
+	return nil, nil
+}
+
+// resolveAndBuffer 는 op 을 파트별로 갈라 각 파트를 검증·스플라이스해 버퍼로
+// 만든다. Replace 는 부르지 않는다 — Apply 와 PartsLoadedBy 가 이 함수 하나를
+// 공유하므로 "op 이 지목한 파트만 스캔한다"는 지연 로딩 계약이 두 곳에서
+// 따로 구현되어 어긋날 여지가 없다.
+func resolveAndBuffer(doc *parts.Document, ops []Op) ([]pending, []Error, error) {
+	// 1) op 을 파트별로 가른다. 파트 해석 실패는 여기서 모은다.
+	byPart := map[string][]Op{}
+	var errs []Error
+	for _, op := range ops {
+		name, e := resolvePart(doc, op)
+		if e != nil {
+			errs = append(errs, *e)
+			continue
+		}
+		byPart[name] = append(byPart[name], op)
+	}
+	if len(errs) > 0 {
+		return nil, errs, nil
+	}
+	if len(byPart) == 0 {
+		return nil, nil, nil // 빈 패치 — 아무것도 건드리지 않는다 (I1)
+	}
+
+	// 2) 파트별로 검증하고 버퍼를 만든다. 아직 아무것도 쓰지 않는다.
+	//    맵이 아니라 계획 순서로 돌아 결정성을 지킨다.
+	var buffers []pending
+	for _, part := range doc.Parts() {
+		partOps, ok := byPart[part.Name]
+		if !ok {
+			continue
+		}
+		tree, err := doc.Tree(part.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		out, es := spliceOne(tree, part, partOps)
+		if len(es) > 0 {
+			return nil, es, nil
+		}
+		buffers = append(buffers, pending{name: part.Name, out: out})
+	}
+	return buffers, nil, nil
+}
+
+// resolvePart 는 op 의 Part 를 물리 파트명으로 푼다.
+// 에러가 파트와 경로 중 어디서 났는지 구분해서 말한다 — 에이전트의 재시도에 필요하다.
+//
+// 못 푼 선택자의 세 갈래 판정(part_not_found / ref_not_found / part_not_scannable)은
+// parts.Document.Reject 가 맡는다 — dump 의 `--part` 가 같은 판정을 쓰므로 같은
+// 입력에 두 답이 나오지 않는다.
+func resolvePart(doc *parts.Document, op Op) (string, *Error) {
+	if op.Part == "" {
+		ps := doc.Parts()
+		if len(ps) == 1 {
+			return ps[0].Name, nil
+		}
+		return "", &Error{Path: op.Path, Reason: "part_not_found",
+			Detail: fmt.Sprintf("본문 파트가 %d개다 — op 에 part 를 명시해야 한다", len(ps))}
+	}
+	if name, ok := doc.Resolve(op.Part); ok {
+		return name, nil
+	}
+	se := doc.Reject(op.Part)
+	return "", &Error{Path: op.Path, Reason: se.Reason, Detail: se.Detail}
+}
+
+// spliceOne 은 파트 하나에 그 파트의 op 들을 적용해 스플라이스된 버퍼를 낸다.
+// 반환은 (out, nil) 또는 (nil, errs) 다 — 에러가 있으면 버퍼를 만들지 않는다.
+func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) {
+	content := tree.Src
 
 	// 1) 모든 op 을 검증한다. 하나라도 실패하면 아무것도 적용하지 않는다.
 	var errs []Error
-	splices := make([]splice, 0, len(pt.Ops))
-	seen := make(map[string]bool, len(pt.Ops))
-	for _, op := range pt.Ops {
+	splices := make([]splice, 0, len(ops))
+	seen := make(map[string]bool, len(ops))
+	for _, op := range ops {
 		// 같은 경로에 연산이 둘 이상이면 거절한다.
 		//
 		// 겹침 검사(splices[i].start < splices[i-1].end)는 폭 0 구간을 못 잡는다:
@@ -81,22 +174,26 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 		case "replaceRaw":
 			splices = append(splices, splice{span: n.Span, repl: []byte(op.XML), path: op.Path})
 		case "setText":
+			// 거절 문구는 포맷 특정 요소 이름을 대지 않는다 — 같은 텍스트 요소가
+			// docx 에서는 w:t, pptx 에서는 a:t 다. setText 의 규칙은 "Word 의
+			// w:t 여야 한다"가 아니라 "지목된 노드가 텍스트 요소(로컬명 t)여야
+			// 한다"이며, 구체 예가 필요한 자리에는 손에 든 노드의 Type 을 쓴다.
 			if n.Type != "t" {
 				errs = append(errs, Error{
 					Path:   op.Path,
 					Reason: "type_mismatch",
-					Detail: fmt.Sprintf("setText 는 w:t 에만 쓸 수 있다 (대상 타입: %s)", n.Type),
+					Detail: fmt.Sprintf("setText 는 텍스트 요소(로컬명 t)에만 쓸 수 있다 (대상 타입: %s)", n.Type),
 				})
 				continue
 			}
-			// self-closing <w:t/> 는 시작/종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다.
-			// wml.Scan 은 이때 Inner 를 요소 바로 뒤의 폭 0 위치로 준다 — 여기 스플라이스하면
-			// 텍스트가 w:t 밖(형제 위치)에 삽입돼 well-formed 지만 의미가 깨진다.
+			// self-closing 텍스트 요소는 시작/종료 태그가 하나로 합쳐져 있어 '안쪽'이 없다.
+			// xmlscan.Scan 은 이때 Inner 를 요소 바로 뒤의 폭 0 위치로 준다 — 여기 스플라이스하면
+			// 텍스트가 요소 밖(형제 위치)에 삽입돼 well-formed 지만 의미가 깨진다.
 			if n.Inner.Start >= n.Span.End {
 				errs = append(errs, Error{
 					Path:   op.Path,
 					Reason: "self_closing_target",
-					Detail: "대상 w:t 가 self-closing 이라 텍스트를 넣을 위치가 없다. replaceRaw 를 쓸 것",
+					Detail: fmt.Sprintf("대상 %s 가 self-closing 이라 텍스트를 넣을 위치가 없다. replaceRaw 를 쓸 것", n.Type),
 				})
 				continue
 			}
@@ -105,11 +202,11 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 			// 네임스페이스까지 본다 — 로컬명만 보면 아무 네임스페이스의
 			// space 속성이나 xml:space 로 통과한다.
 			if strings.TrimSpace(op.Text) != op.Text {
-				if v, ok := n.AttrNS(wml.XMLNS, "space"); !ok || v != "preserve" {
+				if v, ok := n.AttrNS(xmlscan.XMLNS, "space"); !ok || v != "preserve" {
 					errs = append(errs, Error{
 						Path:   op.Path,
 						Reason: "whitespace_needs_preserve",
-						Detail: `대상 w:t 에 xml:space="preserve" 가 없어 앞뒤 공백을 넣을 수 없다. replaceRaw 를 쓸 것`,
+						Detail: fmt.Sprintf(`대상 %s 에 xml:space="preserve" 가 없어 앞뒤 공백을 넣을 수 없다. replaceRaw 를 쓸 것`, n.Type),
 					})
 					continue
 				}
@@ -129,24 +226,18 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 		}
 	}
 	if len(errs) > 0 {
-		return errs, nil
-	}
-
-	// 스플라이스가 없으면(빈 패치) 파트를 건드리지 않는다 — dirty 로 표시하면
-	// Package.Write 가 내용이 같아도 재압축해 바이트가 달라진다 (I1 위반).
-	if len(splices) == 0 {
-		return nil, nil
+		return nil, errs
 	}
 
 	// 2) 겹침 검사
 	sort.Slice(splices, func(i, j int) bool { return splices[i].span.Start < splices[j].span.Start })
 	for i := 1; i < len(splices); i++ {
 		if splices[i].span.Start < splices[i-1].span.End {
-			return []Error{{
+			return nil, []Error{{
 				Path:   splices[i].path,
 				Reason: "overlap",
 				Detail: fmt.Sprintf("%s 의 구간과 겹친다", splices[i-1].path),
-			}}, nil
+			}}
 		}
 	}
 
@@ -166,20 +257,21 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 	// 4) 결과 재스캔 — 바이트를 잘라 붙였으므로 파서가 막아주지 않는다.
 	//
 	// 실패해도 되돌릴 것이 없다: 스플라이스는 지역 버퍼 out 에만 쌓았고
-	// p.Replace 는 아래에서 처음 호출된다. 트랜잭션을 연 적이 없으니 닫을 것도 없다.
+	// Apply 는 모든 버퍼를 검증한 뒤에야 Replace 를 부른다. 트랜잭션을 연 적이
+	// 없으니 닫을 것도 없다.
 	//
 	// 결함은 전적으로 호출자가 준 XML 에 있으므로 입력 오류(코드 1)로 보고한다.
 	// 내부 오류(코드 2)로 보내면, 종료 코드로 재시도 여부를 판단하는 에이전트가
 	// "패치를 고쳐 다시 시도"가 아니라 "도구가 고장났으니 포기"로 잘못 분기한다 (spec §9).
-	if _, err := wml.Scan(out); err != nil {
-		return []Error{{
-			Path:   blame(content, splices),
+	if _, err := xmlscan.Scan(out, part.Root); err != nil {
+		return nil, []Error{{
+			Path:   blame(content, splices, part.Root),
 			Reason: "invalid_xml",
 			Detail: fmt.Sprintf("적용 결과가 유효한 XML 이 아니다 (문서는 손대지 않았다): %v", err),
-		}}, nil
+		}}
 	}
 
-	return nil, p.Replace(dump.ScannedPart, out)
+	return out, nil
 }
 
 // blame 은 결과 XML 을 깨뜨린 op 의 경로를 짚는다.
@@ -187,14 +279,14 @@ func Apply(p *opc.Package, pt Patch) ([]Error, error) {
 // 스플라이스를 하나씩만 적용해 재스캔한다 — 단독으로 적용해도 깨지는 것이 장본인이다.
 // 실패 경로에서만 도는 계산이다. 모두 단독으로는 유효한데 조합에서만 깨지는 경우는
 // 첫 스플라이스를 지목한다 (경로 없는 에러를 내느니 결정론적으로 하나를 짚는다).
-func blame(content []byte, splices []splice) string {
+func blame(content []byte, splices []splice, rootAlias string) string {
 	for _, s := range splices {
 		var buf bytes.Buffer
 		buf.Grow(len(content) - s.span.Len() + len(s.repl))
 		buf.Write(content[:s.span.Start])
 		buf.Write(s.repl)
 		buf.Write(content[s.span.End:])
-		if _, err := wml.Scan(buf.Bytes()); err != nil {
+		if _, err := xmlscan.Scan(buf.Bytes(), rootAlias); err != nil {
 			return s.path
 		}
 	}
@@ -203,8 +295,8 @@ func blame(content []byte, splices []splice) string {
 
 // nearbyHint 는 경로를 못 찾았을 때 형제 개수를 알려준다.
 // 형태를 못 알아본 경로는 왜 힌트를 못 주는지 말한다 — 빈 detail 로 침묵하지 않는다.
-func nearbyHint(tree *wml.Tree, path string) string {
-	const shape = `경로 형태가 "부모/이름[n]" 이 아니라 형제 수를 셀 수 없다 (루트는 "word")`
+func nearbyHint(tree *xmlscan.Tree, path string) string {
+	const shape = `경로 형태가 "부모/이름[n]" 이 아니라 형제 수를 셀 수 없다 (루트 경로엔 인덱스가 없다)`
 	i := strings.LastIndex(path, "/")
 	if i < 0 {
 		return shape
@@ -223,4 +315,18 @@ func nearbyHint(tree *wml.Tree, path string) string {
 		}
 	}
 	return fmt.Sprintf("%s 아래 %s 는 %d개", parent, name, count)
+}
+
+// PartsLoadedBy 는 이 패치를 적용할 때 실제로 스캔되는 파트를 돌려준다.
+// 지연 로딩이 주석이 아니라 계약임을 테스트가 고정하기 위한 것이다.
+// Apply 와 같은 resolveAndBuffer 를 불러 지연 스캔 루프 자체를 관찰한다 —
+// 따로 다시 구현하면 두 로직이 갈라져도 이 테스트가 못 잡는다.
+// 패키지를 변경하지 않는다 — 검증만 하고 버린다.
+func PartsLoadedBy(p *opc.Package, pt Patch) []string {
+	doc, err := parts.Open(p)
+	if err != nil {
+		return nil
+	}
+	resolveAndBuffer(doc, pt.Ops)
+	return doc.Loaded()
 }

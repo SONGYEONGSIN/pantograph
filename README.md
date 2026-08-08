@@ -7,21 +7,24 @@
 
 ## 지금 상태
 
-**docx 수직 슬라이스 구현 완료.** 덤프 · 패치 · 템플릿 역추출까지.
-I1(항등) · I2(국소성) · I4a(템플릿 가역성) 모두 실제 Word 문서(`testdata/real/`)로 검증됐다 — `go test ./...` 전 패키지 통과. 남은 한계는 아래 [알려진 한계](#알려진-한계) 참조.
+**docx + pptx 다중 파트 슬라이스 구현 완료.** 덤프 · 패치 · 템플릿 역추출까지.
+I1(항등) · I2(국소성) · I3(결정성) · I4a(템플릿 가역성) 모두 실제 Word 문서와 실제 PowerPoint 문서(`testdata/real/`)로 검증됐다 — `go test ./...` 전 패키지 통과. 남은 한계는 아래 [알려진 한계](#알려진-한계) 참조.
 
 - [설계 문서](docs/2026-08-06-pantograph-design.md) — 이름·시각 재현 전략·조작 표면 계약·렌더링 엔진·진화 루프
 - [설계 브리프](docs/2026-08-06-design-brief.md) — 전제와 확인이 필요한 가정
 - [docx 왕복 무손실 설계](docs/superpowers/specs/2026-08-06-docx-roundtrip-design.md) — 첫 슬라이스의 확정 설계
+- [다중 파트 + pptx 설계](docs/superpowers/specs/2026-08-08-multipart-design.md) — 두 번째 슬라이스의 확정 설계
 
 ### 쓰는 법
 
 ```
-panto dump  <in.docx>                                     → stdout 덤프 JSON
-panto apply <in.docx> -p <patch.json> -o <out.docx>
-panto tmpl extract <a.docx> <b.docx> [...] -o <tmpl.docx> --schema <schema.json>
-panto tmpl fill    <tmpl.docx> --schema <schema.json> -d <data.json> -o <out.docx>
+panto dump  <in.docx|in.pptx> [--part <선택자>]              → stdout 덤프 JSON
+panto apply <in> -p <patch.json> -o <out>
+panto tmpl extract <a> <b> [...] -o <tmpl> --schema <schema.json>
+panto tmpl fill    <tmpl> --schema <schema.json> -d <data.json> -o <out>
 ```
+
+`--part`는 논리 참조(`pptx/slide[2]`)나 물리 경로 glob(`ppt/slides/*`)을 받는다. 여러 번 줄 수 있고 합집합이다. 생략하면 본문 파트를 전부 덤프한다.
 
 빌드: `go build -o panto ./cmd/panto` (Go 1.26+, 외부 의존 없음)
 
@@ -51,8 +54,11 @@ Pantograph는 차이를 **경로 단위로** 측정한다. 전체 페이지 픽�
 
 ## 알려진 한계
 
-- **문자 참조 인코딩은 왕복이 보장되지 않는다.** 템플릿 채우기는 텍스트를 디코드한 뒤 `&`, `<`, `>`만 다시 이스케이프해 재인코딩한다. 실제 픽스처(`testdata/real/`)의 `&` 필드는 Word 가 `&amp;`로 쓰고 재인코더도 `&amp;`를 내므로 I4a 를 통과했다 — 원본이 `&#38;`·`&quot;`·`&apos;` 로 썼다면 왕복 결과가 바이트 단위로 갈라진다. 이 경로는 아직 어떤 픽스처도 건드리지 않았다 (spec §13)
+- **문자 참조 인코딩은 왕복이 보장되지 않는다.** 템플릿 채우기는 텍스트를 디코드한 뒤 `&`, `<`, `>`만 다시 이스케이프해 재인코딩한다. 실제 픽스처(`testdata/real/`)의 `&` 필드는 Word 가 `&amp;`로 쓰고 재인코더도 `&amp;`를 내므로 I4a 를 통과했다 — 원본이 `&#38;`·`&quot;`·`&apos;` 로 썼다면 왕복 결과가 바이트 단위로 갈라진다. 이 경로는 docx·pptx 어느 픽스처도 아직 건드리지 않았다 (spec §13)
+- **검증 범위는 Word 16.x·PowerPoint 16.x(macOS), 각 문서 2벌이다.** 다른 버전, 다른 생산자(python-docx·python-pptx·Google Docs/Slides·LibreOffice 등)로 검증된 적은 없다
 - **게이트는 바이트 동일 재조립이 안 되는 컨테이너를 전부 거절한다.** 기준 자체는 그대로다. 자체 zip 라이터로 재측정한 결과 Info-ZIP(`zip`, `zip -X`)·macOS `ditto`·Python `zipfile`·Word 자체 writer 넷 다 통과한다 (실측 표: [설계 문서 §2.2](docs/superpowers/specs/2026-08-06-docx-roundtrip-design.md)). 통과 범위가 넓어진 건 기준이 낮아져서가 아니라 라이터가 더 많은 컨테이너를 재현할 수 있게 됐기 때문이다 — 여전히 재현 못 하는 zip 은 `unsupported_container` 로 거절한다
+- **xlsx 는 범위 밖이다.** 시트도 파트로 쪼개지는 건 같지만, 셀 텍스트가 시트 자신이 아니라 `xl/sharedStrings.xml` 에 모여 인덱스로 참조된다 — "노드는 파트 하나에 속한다"는 이 슬라이스의 전제를 깬다 (multipart spec §12)
+- **슬라이드 추가·삭제·재정렬은 범위 밖이다.** `presentation.xml` 과 그 rels 를 함께 고쳐야 해서 제자리 변경이 아니다 — 선행 슬라이스가 `insert`/`delete` 연산을 뺀 것과 같은 이유다 (multipart spec §12)
 - **렌더러는 실제 오피스 앱이 아니다.** 설계로 닫히지 않는 위험이라, 격차 자체를 기록해 추세를 본다
 - **폰트가 정확도의 상한을 만든다.** 시안의 폰트는 픽셀에서 역추론할 수 없다
 - **"단일 바이너리"와 "렌더 충실도"는 둘 다 가질 수 없다.** 내장 렌더(빠른 루프) + LibreOffice(정밀 판정) 2단으로 나눴다

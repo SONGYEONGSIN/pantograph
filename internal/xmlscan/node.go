@@ -1,8 +1,9 @@
-// Package wml 은 WordprocessingML 을 스캔해 노드마다 경로와 바이트 범위를 부여한다.
+// Package xmlscan 은 XML 파트를 스캔해 노드마다 경로와 바이트 범위를 부여한다.
+// 포맷을 모른다 — 루트 별칭을 주입받으므로 docx·pptx 어느 파트에도 같이 쓴다 (spec §5).
 //
 // 이 패키지에는 재직렬화 함수가 없다. 의도적이다.
 // XML 트리를 바이트로 되돌리는 경로가 존재하면 무손실이 깨진다 (spec §2.1).
-package wml
+package xmlscan
 
 // Span 은 스캔 대상 바이트 슬라이스 내의 [Start, End) 구간이다.
 type Span struct {
@@ -35,6 +36,11 @@ const XMLNS = "http://www.w3.org/XML/1998/namespace"
 //	      NS == "xmlns" 인 항목을 걸러야 한다
 //	Text  이 요소가 **직접** 품은 문자 데이터. 자손의 텍스트는 포함하지 않는다
 type Node struct {
+	// Part 는 이 노드가 속한 파트의 물리 경로다.
+	// Scan 은 파트를 모르므로 채우지 않는다 — parts.Document.Tree 가 채운다.
+	// JSON 에는 싣지 않는다: 덤프가 파트로 묶여 나가므로 묶음 머리에 이미 있다.
+	Part string `json:"-"`
+
 	Path  string `json:"path"`
 	Type  string `json:"type"`
 	Span  Span   `json:"span"`

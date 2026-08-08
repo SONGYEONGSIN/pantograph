@@ -1,4 +1,4 @@
-package wml
+package xmlscan
 
 import (
 	"bytes"
@@ -20,13 +20,17 @@ type frame struct {
 
 // Scan 은 XML 바이트를 훑어 노드마다 경로와 바이트 범위를 부여한다.
 //
+// rootAlias 는 루트 요소가 가질 경로다. 파트마다 다르다 —
+// word/document.xml 은 "document", ppt/slides/slideN.xml 은 "sld".
+// 경로는 파트 안으로 스코프되므로 유일성은 (파트, 경로) 쌍이 만든다.
+//
 // 오프셋은 xml.Decoder.InputOffset 으로 얻는다. InputOffset 은 "가장 최근에
 // 반환된 토큰의 끝이자 다음 토큰의 시작"을 가리키므로, 토큰을 읽기 직전의
 // 오프셋이 곧 그 토큰의 시작이다. CharData 가 공백까지 토큰으로 반환하므로
 // 연속된 오프셋이 입력을 빈틈없이 분할한다.
 //
 // 같은 입력이면 항상 같은 결과를 낸다 — 난수·시각·맵 순회가 개입하지 않는다.
-func Scan(src []byte) (*Tree, error) {
+func Scan(src []byte, rootAlias string) (*Tree, error) {
 	dec := xml.NewDecoder(bytes.NewReader(src))
 	t := &Tree{Src: src, index: make(map[string]int)}
 
@@ -47,7 +51,7 @@ func Scan(src []byte) (*Tree, error) {
 
 		switch tk := tok.(type) {
 		case xml.StartElement:
-			path := "word"
+			path := rootAlias
 			if len(stack) > 0 {
 				parent := stack[len(stack)-1]
 				parent.counts[tk.Name.Local]++

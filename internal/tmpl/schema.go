@@ -8,6 +8,7 @@ package tmpl
 // Key 는 템플릿의 가변 자리 하나다.
 type Key struct {
 	Key     string   `json:"key"`
+	Part    string   `json:"part"`
 	Path    string   `json:"path"`
 	Samples []string `json:"samples"`
 }
@@ -41,4 +42,29 @@ func isVolatile(local string) bool {
 		return true
 	}
 	return len(local) >= 4 && local[:4] == "rsid"
+}
+
+// VolatileElements 는 diffMarkup 이 **속성만** 통째로 비교에서 빼는 요소의
+// 로컬명이다 — 요소 전체가 휘발성인 것은 아니다. Type·직접 텍스트·자손은
+// VolatileAttrs 와 마찬가지로 그대로 비교 대상에 남는다. VolatileAttrs 와
+// 달리 속성 이름이 아니라 요소 이름으로 판정한다 — 이 요소들은 "생성할
+// 때마다 새로 찍는 식별자"만 속성으로 담는 게 존재 이유라 속성 이름으로는
+// 저격할 수 없다.
+//
+// 로컬명만으로 키를 잡는 이유: xmlscan.Attr 에는 NS(네임스페이스)가 있지만
+// xmlscan.Node 에는 없다 — 요소의 네임스페이스를 스캐너가 안 담는다는
+// 구조적 한계다. 나중에 이 저격을 네임스페이스까지 좁혀야 한다면 거기서부터
+// 손대야 한다.
+//
+// creationId: PowerPoint 가 도형을 새로 만들 때마다(a16:creationId, 속성
+// 이름은 id) · 슬라이드를 새로 만들 때마다(p14:creationId, 속성 이름은
+// val) 찍는 GUID·숫자 식별자. xmlscan.Attr.Name 은 로컬명만 담으므로
+// 네임스페이스(a16: vs p14:)와 무관하게 둘 다 Type=="creationId" 로
+// 잡힌다. "id"·"val" 은 OOXML 전역에서 진짜 내용(색상 값 등)을 나르는
+// 흔한 이름이라 VolatileAttrs 로 넣으면 그 내용까지 다 숨겨버린다 —
+// 그래서 요소 단위로 통째로 뺀다. diffStructure 가 이미 두 문서의
+// 노드 경로 순열이 같다는 걸 보장하므로, 이 요소가 한쪽에만 있고
+// 없는 경우는 여기 오기 전에 structure_mismatch 로 걸린다.
+var VolatileElements = map[string]bool{
+	"creationId": true,
 }
