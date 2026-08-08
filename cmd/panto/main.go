@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
+	"github.com/SONGYEONGSIN/pantograph/internal/parts"
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
 )
 
@@ -25,7 +26,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `panto — docx 재현 하네스
 
 사용법:
-  panto dump  <in.docx>
+  panto dump  <in.docx> [--part <선택자>]
   panto apply <in.docx> -p <patch.json> -o <out.docx>
   panto tmpl extract <a.docx> <b.docx> [...] -o <tmpl.docx> --schema <schema.json>
   panto tmpl fill    <tmpl.docx> --schema <schema.json> -d <data.json> -o <out.docx>
@@ -71,6 +72,21 @@ func fail(path string, err error) int {
 		Detail: ue.Detail,
 	}}}); err != nil {
 		return die(exitInternal, "%v", err)
+	}
+	return exitInput
+}
+
+// failFormat 은 포맷·선택자 오류를 입력 오류로 낸다.
+// unsupported_container 와 같은 취급이다 — 입력 파일의 성질이지 도구의 고장이 아니다.
+func failFormat(path string, err error) int {
+	reason := "unsupported_format"
+	if !errors.Is(err, parts.ErrUnsupportedFormat) {
+		reason = "part_not_found"
+	}
+	if e := emit(patch.Result{OK: false, Errors: []patch.Error{
+		{Path: path, Reason: reason, Detail: err.Error()},
+	}}); e != nil {
+		return die(exitInternal, "%v", e)
 	}
 	return exitInput
 }

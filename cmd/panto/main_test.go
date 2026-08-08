@@ -275,12 +275,15 @@ func TestDumpReportsUnsupportedMethodAsInputError(t *testing.T) {
 }
 
 // TestApplyReportsUnsupportedMethodAsInputError 는 같은 것을 apply 에서 본다.
-// 빈 패치도 word/document.xml 을 풀어 스캔하므로 이 경로를 탄다.
+// Apply 는 이제 op 이 지목한 파트만 지연 스캔한다 (Task 6) — 빈 패치는
+// 아무 파트도 스캔하지 않으므로, op 이 word/document.xml 을 실제로
+// 가리켜야 이 경로가 탄다.
 func TestApplyReportsUnsupportedMethodAsInputError(t *testing.T) {
 	dir := t.TempDir()
 	in := unsupportedMethodDocx(t, filepath.Join(dir, "in.docx"))
 	patchPath := filepath.Join(dir, "patch.json")
-	if err := os.WriteFile(patchPath, []byte(`{"ops":[]}`), 0o644); err != nil {
+	patchJSON := `{"ops":[{"op":"setText","path":"document/body[1]/p[1]/r[1]/t[1]","text":"x"}]}`
+	if err := os.WriteFile(patchPath, []byte(patchJSON), 0o644); err != nil {
 		t.Fatalf("패치 파일 쓰기 실패: %v", err)
 	}
 	outPath := filepath.Join(dir, "out.docx")

@@ -97,6 +97,16 @@ func (d *Document) Lookup(name, nodePath string) (xmlscan.Node, bool) {
 	return t.Lookup(nodePath)
 }
 
+// Exists 는 파트가 컨테이너에 있는지 본다 (스캔 대상 여부와 무관하다).
+func (d *Document) Exists(name string) bool {
+	for _, n := range d.pkg.Names() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Resolve 는 선택자 하나를 물리 파트명으로 푼다.
 // 논리 참조를 먼저 정확 일치로 보고, 없으면 물리 파트명으로 본다 —
 // pptx/slide[3] 의 [ 가 glob 문자 클래스로 오독되지 않도록 이 순서가 필요하다.
