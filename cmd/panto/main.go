@@ -1,8 +1,9 @@
-// panto 는 docx 를 경로 단위로 덤프·패치하는 CLI 다.
+// panto 는 docx·pptx 를 경로 단위로 덤프·패치하는 CLI 다.
 // 모든 출력은 stdout JSON, 모든 진단은 stderr 다.
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,10 +17,16 @@ import (
 )
 
 // 종료 코드 (spec §9)
+//
+// **손상된 문서는 코드 2 가 아니라 코드 1 이다.** 컨테이너가 재현되지 않는 것도
+// (unsupported_container), 본문 파트가 읽히지 않는 것도(unsupported_format)
+// 그 파일의 성질이지 이 도구의 고장이 아니다 — 같은 파일로 다시 실행해도 같은
+// 결과가 나온다. 코드 2 는 "이 도구가 제 일을 못 했다"는 신호이므로, 손상 파일을
+// 여기로 보내면 에이전트가 고칠 수 없는 것을 재시도하거나 사람을 잘못 부른다.
 const (
 	exitOK       = 0 // 성공
 	exitInput    = 1 // 입력 오류 — 경로 미해석 / hash 불일치 / 겹침 / 거절 / 구조 불일치
-	exitInternal = 2 // 내부 오류 — 파일 손상 / I/O / 적용 후 재스캔 실패
+	exitInternal = 2 // 내부 오류 — 파일 I/O / 분류되지 않은 오류 / 적용 후 재스캔 실패
 )
 
 // usage 는 하위 명령의 사용법 문구와 같은 표면을 말해야 한다 —
@@ -54,6 +61,31 @@ func emit(v any) error {
 	}
 	_, err = os.Stdout.Write(append(b, '\n'))
 	return err
+}
+
+// decodeStrict 는 JSON 파일을 읽되 **모르는 필드와 뒤에 남은 내용을 모두 거절한다.**
+//
+// encoding/json 의 두 기본 동작이 각각 조용히 위험하다.
+//
+//	Unmarshal — 모르는 필드를 버린다. "text" 를 "value" 로 잘못 쓴 setText 가
+//	            빈 문자열이 되어 {"ok": true} 와 함께 그 자리의 텍스트를 지웠다.
+//	Decoder   — 첫 값만 읽고 뒤를 안 본다. 잘리거나 두 번 이어붙은 파일이 통과한다.
+//
+// 둘 다 성공을 보고하면서 사용자가 쓴 것과 다른 일을 한다. 하나를 고치려고
+// 다른 하나로 갈아타면 구멍이 옮겨갈 뿐이라, 두 검사를 함께 여기 한 곳에 둔다.
+//
+// 뒤에 남은 내용은 Token() 이 io.EOF 를 내는지로 본다 — Decoder.More() 는 다음
+// 바이트가 `]` 나 `}` 면 false 를 내므로 `{...}]` 같은 꼬리를 놓친다.
+func decodeStrict(b []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("JSON 값 뒤에 내용이 더 있다")
+	}
+	return nil
 }
 
 // classify 는 오류가 stdout JSON 으로 보고할 **입력 부류**인지 가르고 그 reason 을 낸다.

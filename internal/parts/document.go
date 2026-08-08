@@ -90,10 +90,19 @@ func (d *Document) Loaded() []string {
 	return out
 }
 
-// Exists 는 파트가 컨테이너에 있는지 본다 (스캔 대상 여부와 무관하다).
-func (d *Document) Exists(name string) bool {
+// Covers 는 선택자가 컨테이너의 엔트리를 하나라도 가리키는지 본다
+// (스캔 대상 여부와 무관하다). 정확 이름과 glob 을 모두 본다.
+//
+// glob 을 보는 이유: `ppt/theme/*` 는 컨테이너의 테마 파트들을 정확히 고르지만
+// 그중 본문 파트는 하나도 없다. 정확 이름만 보면 이 선택자는 "문서에 없다"로
+// 판정되는데, 테마 파트는 멀쩡히 문서 안에 있으므로 그 말은 거짓이다.
+// 없는 것을 찾는 것과 있는 것을 못 스캔하는 것은 사용자가 할 일이 다르다.
+func (d *Document) Covers(sel string) bool {
 	for _, n := range d.pkg.Names() {
-		if n == name {
+		if n == sel {
+			return true
+		}
+		if ok, err := path.Match(sel, n); err == nil && ok {
 			return true
 		}
 	}
@@ -137,9 +146,9 @@ func (d *Document) Reject(sel string) *SelectError {
 	case isRefShaped(sel):
 		return &SelectError{Sel: sel, Reason: "ref_not_found",
 			Detail: fmt.Sprintf("논리 참조 %q 가 풀리지 않는다", sel)}
-	case d.Exists(sel):
+	case d.Covers(sel):
 		return &SelectError{Sel: sel, Reason: "part_not_scannable",
-			Detail: fmt.Sprintf("%s 는 컨테이너에 있으나 스캔 대상이 아니다", sel)}
+			Detail: fmt.Sprintf("%s 가 고르는 파트는 컨테이너에 있으나 스캔 대상이 아니다", sel)}
 	default:
 		return &SelectError{Sel: sel, Reason: "part_not_found",
 			Detail: fmt.Sprintf("선택자 %q 가 가리키는 파트가 문서에 없다", sel)}

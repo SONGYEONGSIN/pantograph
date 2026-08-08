@@ -81,11 +81,11 @@ func Plan(p *opc.Package) (string, []Part, error) {
 func orderSlides(p *opc.Package, ct *contentTypes) ([]Part, error) {
 	presRaw, err := p.Part("ppt/presentation.xml")
 	if err != nil {
-		return nil, fmt.Errorf("%w: ppt/presentation.xml 없음: %w", ErrUnsupportedFormat, err)
+		return nil, fmt.Errorf("%w: %w", ErrUnsupportedFormat, err)
 	}
 	relsRaw, err := p.Part("ppt/_rels/presentation.xml.rels")
 	if err != nil {
-		return nil, fmt.Errorf("%w: ppt/_rels/presentation.xml.rels 없음: %w", ErrUnsupportedFormat, err)
+		return nil, fmt.Errorf("%w: %w", ErrUnsupportedFormat, err)
 	}
 
 	var pres struct {

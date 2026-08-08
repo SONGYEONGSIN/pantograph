@@ -139,7 +139,7 @@ func cmdTmplFill(args []string) int {
 		return die(exitInternal, "%v", err)
 	}
 	var sch tmpl.Schema
-	if err := json.Unmarshal(sb, &sch); err != nil {
+	if err := decodeStrict(sb, &sch); err != nil {
 		return die(exitInput, "스키마 JSON 파싱 실패: %v", err)
 	}
 	// keys 가 비어있으면 Fill 이 만드는 ops 도 비어있어 patch.Apply 가
@@ -154,7 +154,7 @@ func cmdTmplFill(args []string) int {
 		return die(exitInternal, "%v", err)
 	}
 	var data map[string]string
-	if err := json.Unmarshal(db, &data); err != nil {
+	if err := decodeStrict(db, &data); err != nil {
 		return die(exitInput, "데이터 JSON 파싱 실패: %v", err)
 	}
 

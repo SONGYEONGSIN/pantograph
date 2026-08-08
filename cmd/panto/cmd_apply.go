@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
@@ -43,7 +42,7 @@ func cmdApply(args []string) int {
 		return die(exitInternal, "%v", err)
 	}
 	var pt patch.Patch
-	if err := json.Unmarshal(pb, &pt); err != nil {
+	if err := decodeStrict(pb, &pt); err != nil {
 		return die(exitInput, "패치 JSON 파싱 실패: %v", err)
 	}
 

@@ -449,6 +449,7 @@ func TestDumpSelectorReasonsMatchApply(t *testing.T) {
 		{"ppt/theme/theme1.xml", "part_not_scannable"}, // 컨테이너엔 있으나 본문 파트가 아니다
 		{"pptx/slide[99]", "ref_not_found"},            // 논리 참조 모양인데 안 풀린다
 		{"ppt/nope/*", "part_not_found"},               // 아무것도 못 고르는 glob
+		{"ppt/theme/*", "part_not_scannable"},          // 컨테이너 엔트리는 고르지만 전부 본문 파트가 아니다
 	}
 	for _, c := range cases {
 		var code int
@@ -492,5 +493,113 @@ func TestApplyEmptyPatchIsByteIdentical(t *testing.T) {
 	}
 	if !bytes.Equal(src, got) {
 		t.Fatalf("I1 위반 — 빈 패치인데 바이트가 달라졌다 (%d -> %d바이트)", len(src), len(got))
+	}
+}
+
+// TestApplyRejectsUnknownPatchField 는 op 의 필드 이름을 잘못 쓴 패치를
+// 거절하는지 본다.
+//
+// encoding/json 은 모르는 필드를 조용히 버린다. 그래서 "text" 를 "value" 로
+// 잘못 쓴 setText 는 빈 문자열로 성공했다 — {"ok": true} 를 내면서 문서의
+// 텍스트를 지웠다. 빈 텍스트 자체는 정당한 연산이라 결과만 봐서는 오타와
+// 구별되지 않으므로, 막을 수 있는 지점은 디코드뿐이다.
+func TestApplyRejectsUnknownPatchField(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"지켜져야 할 텍스트"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	bad := `{"ops":[{"op":"setText","path":"document/body[1]/p[1]/r[1]/t[1]","value":"오타"}]}`
+	if err := os.WriteFile(patchPath, []byte(bad), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	if code != exitInput {
+		t.Fatalf("모르는 필드가 있는 패치인데 exit=%d (기대 %d)", code, exitInput)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
+// TestTmplFillRejectsUnknownSchemaField 는 스키마 JSON 의 오타도 같은 이유로
+// 거절하는지 본다. 스키마는 키마다 part·path 를 들고 있어, 필드 하나가 조용히
+// 비면 채우기가 엉뚱한 곳을 가리키거나 아무 데도 안 간다.
+func TestTmplFillRejectsUnknownSchemaField(t *testing.T) {
+	dir := t.TempDir()
+	tmplPath := filepath.Join(dir, "t.docx")
+	if err := os.WriteFile(tmplPath, testutil.MinimalDocx([]string{"자리"}), 0o644); err != nil {
+		t.Fatalf("템플릿 쓰기 실패: %v", err)
+	}
+	schemaPath := filepath.Join(dir, "schema.json")
+	bad := `{"base":"t.docx","keys":[{"key":"k1","paths":"document/body[1]/p[1]/r[1]/t[1]"}]}`
+	if err := os.WriteFile(schemaPath, []byte(bad), 0o644); err != nil {
+		t.Fatalf("스키마 쓰기 실패: %v", err)
+	}
+	dataPath := filepath.Join(dir, "data.json")
+	if err := os.WriteFile(dataPath, []byte(`{"k1":"값"}`), 0o644); err != nil {
+		t.Fatalf("데이터 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdTmpl([]string{"fill", tmplPath, "--schema", schemaPath, "-d", dataPath, "-o", outPath})
+	})
+	if code != exitInput {
+		t.Fatalf("모르는 필드가 있는 스키마인데 exit=%d (기대 %d)", code, exitInput)
+	}
+	// 종료 코드만으로는 부족하다 — 오타 난 스키마는 지금도 코드 1 로 끝나지만,
+	// 그건 빈 path 를 들고 채우기까지 간 뒤 template_drift("템플릿에  경로가 없다")
+	// 로 걸리기 때문이다. 원인이 오타라는 사실이 그 메시지 어디에도 없다.
+	// 파싱 단계에서 끊기면 stdout 봉투 자체가 나오지 않는다.
+	if stdout != "" {
+		t.Fatalf("스키마 오타가 파싱을 통과해 채우기까지 갔다: %s", stdout)
+	}
+}
+
+// TestRejectsTrailingJSON 은 첫 JSON 값 뒤에 내용이 더 있으면 거절하는지 본다.
+//
+// json.Unmarshal 은 뒤에 남은 내용을 오류로 봤지만 json.Decoder.Decode 는 첫
+// 값만 읽고 멈춘다. DisallowUnknownFields 를 쓰려고 Decoder 로 바꾸면 이 검사가
+// 조용히 사라져, 잘린 파일이나 두 번 이어붙인 파일이 **성공으로** 통과한다 —
+// 모르는 필드를 막으려다 같은 부류의 구멍을 새로 여는 셈이다.
+//
+// `]` 를 따로 보는 이유: Decoder.More() 는 다음 바이트가 `]` 나 `}` 면 false 를
+// 내므로 그것만으로는 이 경우를 못 잡는다. Token() 이 io.EOF 를 내는지로 본다.
+func TestRejectsTrailingJSON(t *testing.T) {
+	head := `{"ops":[{"op":"setText","path":"document/body[1]/p[1]/r[1]/t[1]","text":"값"}]}`
+	for _, c := range []struct{ name, body string }{
+		{"쓰레기", head + ` 이 뒤는 JSON 이 아니다`},
+		{"닫는 괄호", head + `]`},
+		{"값 두 개", head + head},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			inPath := filepath.Join(dir, "in.docx")
+			if err := os.WriteFile(inPath, testutil.MinimalDocx([]string{"원래 텍스트"}), 0o644); err != nil {
+				t.Fatalf("입력 파일 쓰기 실패: %v", err)
+			}
+			patchPath := filepath.Join(dir, "patch.json")
+			if err := os.WriteFile(patchPath, []byte(c.body), 0o644); err != nil {
+				t.Fatalf("패치 파일 쓰기 실패: %v", err)
+			}
+			outPath := filepath.Join(dir, "out.docx")
+
+			var code int
+			stdout := captureStdout(t, func() {
+				code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+			})
+			if code != exitInput {
+				t.Fatalf("여분의 내용이 있는 패치인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+			}
+			if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+				t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+			}
+		})
 	}
 }
