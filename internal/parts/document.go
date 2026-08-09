@@ -1,6 +1,8 @@
 package parts
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"path"
 	"strings"
@@ -81,6 +83,56 @@ func (d *Document) Tree(name string) (*xmlscan.Tree, error) {
 	d.trees[name] = t
 	d.order = append(d.order, name)
 	return t, nil
+}
+
+// Bytes 는 파트의 압축 해제된 내용을 돌려준다. **계획 밖 파트도 받는다** —
+// diff 가 본문 아닌 파트를 비교하려면 이 길이 필요하다.
+// 캐시하지 않는다: opc.Package.Part 가 이미 파트마다 한 번만 푼다.
+func (d *Document) Bytes(name string) ([]byte, error) {
+	return d.pkg.Part(name)
+}
+
+// ScanAny 는 계획 밖 파트를 스캔한다.
+//
+// Tree 와 둘로 나뉘는 이유는 루트 별칭이다 — Tree 는 계획에서 가져오지만
+// 계획 밖 파트에는 지정된 별칭이 없다. 여기서는 **루트 요소의 로컬명**을 쓴다
+// (multipart 설계가 통일한 규약).
+//
+// 결과를 trees 캐시에 담지 않는다. 계획 밖 파트는 계획의 일부가 아니라서,
+// 담으면 Loaded() 가 "지연 스캔이 무엇을 풀었나"를 더 이상 정직하게 말하지
+// 못한다 — 그 값으로 지연성을 검증하는 테스트가 있다.
+func (d *Document) ScanAny(name string) (*xmlscan.Tree, error) {
+	content, err := d.pkg.Part(name)
+	if err != nil {
+		return nil, err
+	}
+	alias, err := rootLocalName(content)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	t, err := xmlscan.Scan(content, alias)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	for i := range t.Nodes {
+		t.Nodes[i].Part = name
+	}
+	return t, nil
+}
+
+// rootLocalName 은 첫 시작 태그의 로컬명을 낸다.
+// XML 이 아니면 에러다 — 호출자가 그것으로 "스캔할 수 없는 파트"를 가른다.
+func rootLocalName(src []byte) (string, error) {
+	dec := xml.NewDecoder(bytes.NewReader(src))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", fmt.Errorf("루트 요소를 찾지 못했다: %w", err)
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			return se.Name.Local, nil
+		}
+	}
 }
 
 // Loaded 는 실제로 스캔된 파트를 스캔 순서로 돌려준다. 지연 로딩 검증용이다.
