@@ -1,6 +1,8 @@
 package diff
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
@@ -231,5 +233,104 @@ func TestCompareTreesAlignsAcrossDeletionAndFindsDownstreamText(t *testing.T) {
 	}
 	if len(rep.Diffs) != 2 {
 		t.Fatalf("항목이 %d개다 (기대 2 — deleted 1 + text 1): %+v", len(rep.Diffs), rep.Diffs)
+	}
+}
+
+// TestCapExceededProducesStructureNotSilentPositionalFallback 은 최종 리뷰
+// Important 지적(I-1)을 잠근다 — L4("정렬이 상한을 넘으면 위치 정렬로
+// 떨어지되 그 사실을 structure 항목으로 알린다")가 alignChildren 의
+// `if capped { rep.add(...) }` 이음매에서 실제로 지켜지는지, compareTrees
+// 경로로 직접 확인한다.
+//
+// align_test.go 의 TestAlignSiblingsCapFallsBackAndSaysSo 는 alignSiblings 가
+// capped=true 를 **돌려주는지**만 본다 — 그 값이 실제로 structure 항목이
+// 되는지는 이 파일 어디에도 없었다. 리뷰어가 `if capped` 를
+// `if false && capped` 로 바꾸고 전체 스위트를 돌려보니 초록으로 끝났다 —
+// L4 를 통째로 삭제해도 아무도 몰랐다는 뜻이다. 이 테스트가 그 이음매를
+// 잠근다(RED 확인은 보고서 참조).
+//
+// 형제 2001개씩(2001×2001 = 4,004,001 > maxCells)을 전부 다른 텍스트로 만들어
+// 앞뒤 공통 잘라내기가 전혀 안 먹게 한다. capped 로 떨어지면 alignChildren 은
+// structure 항목 하나를 내고, 남은 상한 초과 구간은 위치로 짝지어 재귀한다 —
+// 형제 2001개가 전부 자리별로 텍스트만 다르므로 재귀가 text 항목 2001개를
+// 낸다.
+func TestCapExceededProducesStructureNotSilentPositionalFallback(t *testing.T) {
+	const n = 2001 // 2001 × 2001 = 4,004,001 > maxCells(4,000,000)
+	mk := func(prefix string) *xmlscan.Tree {
+		nodes := make([]xmlscan.Node, 0, n+1)
+		nodes = append(nodes, xmlscan.Node{
+			Path: "document", Type: "document",
+			Span: xmlscan.Span{Start: 0, End: n*10 + 10},
+		})
+		for i := 0; i < n; i++ {
+			start := 1 + i*10
+			nodes = append(nodes, xmlscan.Node{
+				Path: fmt.Sprintf("document/p[%d]", i+1), Type: "p",
+				Text: prefix + itoa(i),
+				Span: xmlscan.Span{Start: start, End: start + 5},
+			})
+		}
+		return &xmlscan.Tree{Nodes: nodes}
+	}
+	a := mk("A")
+	b := mk("B") // 접두사가 달라 하나도 안 겹친다 — 앞뒤 잘라내기가 안 먹는다
+
+	rep := &Report{}
+	compareTrees(rep, "body", "test.xml", a, b)
+
+	if rep.Summary.Structure != 1 {
+		t.Fatalf("structure=%d (기대 1 — 상한 초과를 알려야 한다): %+v", rep.Summary.Structure, rep.Diffs)
+	}
+	if rep.Summary.Text != n {
+		t.Fatalf("text=%d (기대 %d — 위치로 짝지어진 형제마다 텍스트가 다르다)", rep.Summary.Text, n)
+	}
+}
+
+// TestComparePairTypeMismatchDisclosesDiscardedWeight 는 최종 리뷰 Important
+// 지적(I-2)을 잠근다 — 타입이 다르면 그 서브트리를 통째로 버리는데, 그 사실의
+// 무게(버려진 노드 수)가 elem 항목의 detail 에 실리는지 본다.
+//
+// 리뷰어 재현: 루트 아래 p(자식 3개, 텍스트 가/나/다) 대 tbl(자식 3개,
+// A/B/C) 를 비교하면 옛 코드는 elem 1건에 detail="" 을 낸다 — 자식 3개의
+// 텍스트 차이가 통째로 사라졌다는 사실을 아무도 말하지 않는다. deleted·
+// inserted 는 detail 에 "노드 %d개"로 버려진 무게를 알리는데 같은 무게를
+// 버리는 elem 만 침묵하면, 소비자는 total 1 을 보고 "거의 같다"로 읽는다.
+func TestComparePairTypeMismatchDisclosesDiscardedWeight(t *testing.T) {
+	mk := func(childType string, texts ...string) *xmlscan.Tree {
+		nodes := []xmlscan.Node{
+			{Path: "document", Type: "document", Span: xmlscan.Span{Start: 0, End: 100}},
+			{Path: "document/" + childType + "[1]", Type: childType, Span: xmlscan.Span{Start: 1, End: 50}},
+		}
+		for i, txt := range texts {
+			start := 2 + i*9
+			nodes = append(nodes, xmlscan.Node{
+				Path: fmt.Sprintf("document/%s[1]/t[%d]", childType, i+1), Type: "t", Text: txt,
+				Span: xmlscan.Span{Start: start, End: start + 5},
+			})
+		}
+		return &xmlscan.Tree{Nodes: nodes}
+	}
+	a := mk("p", "가", "나", "다")
+	b := mk("tbl", "A", "B", "C")
+
+	rep := &Report{}
+	compareTrees(rep, "body", "test.xml", a, b)
+
+	if rep.Summary.Elem != 1 {
+		t.Fatalf("elem=%d (기대 1): %+v", rep.Summary.Elem, rep.Diffs)
+	}
+	if rep.Summary.Total != 1 {
+		t.Fatalf("total=%d (기대 1 — 자식 비교로 새는 항목이 없어야 한다): %+v", rep.Summary.Total, rep.Diffs)
+	}
+	d := rep.Diffs[0]
+	if d.Kind != "elem" {
+		t.Fatalf("kind=%q (기대 elem)", d.Kind)
+	}
+	if d.Detail == "" {
+		t.Fatal("detail 이 비었다 — 버려진 서브트리 크기를 알려야 한다")
+	}
+	// 두 서브트리 모두 자기 자신(1) + 자식 3개 = 4 노드다.
+	if !strings.Contains(d.Detail, "4노드") {
+		t.Fatalf("detail 이 버려진 노드 수(4)를 담지 않는다: %q", d.Detail)
 	}
 }

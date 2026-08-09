@@ -10,8 +10,9 @@ package diff
 //
 // Expected·Actual 이 포인터인 이유: 한쪽에만 있는 속성을 null 로 실어야 한다.
 // omitempty 를 붙이지 않는 이유: 모든 항목이 같은 모양이어야 소비자가 kind 별로
-// 분기하지 않고 읽을 수 있다. 값이 없는 kind(structure·part_content·
-// part_missing)에서는 null 이 나오며, 그것이 "값이 없다"는 정직한 표현이다.
+// 분기하지 않고 읽을 수 있다. 값이 없는 kind(structure·inserted·deleted·
+// part_content·part_missing)에서는 null 이 나오며, 그것이 "값이 없다"는
+// 정직한 표현이다.
 type Diff struct {
 	Kind     string  `json:"kind"`
 	Scope    string  `json:"scope,omitempty"` // "body" | "other". 파트 전체 항목은 비운다
@@ -28,10 +29,12 @@ type Summary struct {
 	Text int `json:"text"`
 	Attr int `json:"attr"`
 	Elem int `json:"elem"`
-	// Structure 는 **정렬을 포기하고 위치로 비교한** 형제 목록의 수다.
-	// 형제가 상한(align.go 의 maxCells)을 넘을 때만 난다. 실제 문서에서는
+	// Structure 는 **정렬을 포기하고 위치로 비교한** 경우의 수다. 두 조건
+	// 중 하나에서 난다: (1) 형제가 상한(align.go 의 maxCells)을 넘을 때,
+	// (2) 한쪽 파트가 노드 0개로 스캔될 때(compare.go — xmlscan.Scan 은
+	// 시작 요소가 없는 XML 도 에러 없이 빈 트리로 받아준다). 실제 문서에서는
 	// 사실상 0 이다. 예전에는 "구조가 갈려 그 파트를 포기했다"는 뜻이었으나
-	// LCS 정렬이 들어오면서 포기하는 일이 없어졌다.
+	// LCS 정렬이 들어오면서 형제 수준에서는 포기하는 일이 없어졌다.
 	Structure int `json:"structure"`
 	// Inserted·Deleted 는 **서브트리당 1건**이다. 문단 하나는 노드 3개
 	// (w:p·w:r·w:t)이고 실제 문서에서는 10~20개다 — 노드마다 세면 문단 하나에

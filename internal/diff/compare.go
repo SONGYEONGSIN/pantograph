@@ -166,8 +166,11 @@ func compareTrees(rep *Report, scope, part string, a, b *xmlscan.Tree) {
 		return
 	}
 	if ra == nil || rb == nil {
-		// 한쪽 파트가 비었다. 스캔이 성공했으면 루트는 있으므로 실제로는
-		// 오지 않지만, 조용히 넘어가면 빈 파트가 "같다"로 보고된다.
+		// 한쪽 파트가 비었다. xmlscan.Scan 은 시작 요소가 하나도 없는
+		// XML(선언만 있거나 주석만 있거나 완전히 빈 파일)도 에러 없이 노드
+		// 0개 트리로 받아준다 — 실제로 오는 경로다. 계획 밖 파트가 한쪽에서
+		// 비면 compareOtherParts 2단(스캔 비교)을 지나 여기 온다. 조용히
+		// 넘어가면 빈 파트가 "같다"로 보고된다.
 		rep.add(Diff{Kind: "structure", Scope: scope, Part: part,
 			Detail: "한쪽 파트에 노드가 없다"})
 		return
@@ -181,9 +184,14 @@ func compareTrees(rep *Report, scope, part string, a, b *xmlscan.Tree) {
 func comparePair(rep *Report, scope, part string, x, y *node) {
 	if x.Type != y.Type {
 		// 같은 자리에 다른 요소가 있다. 그 안을 파고들지 않는다 — 서로 다른
-		// 요소의 자식을 비교하면 항목만 늘고 뜻은 없다.
+		// 요소의 자식을 비교하면 항목만 늘고 뜻은 없다. 다만 침묵하지는
+		// 않는다 — deleted·inserted 가 detail 에 "노드 %d개"로 버려진 무게를
+		// 알리듯, elem 도 양쪽 서브트리가 몇 노드였는지 알려야 한다. 안 그러면
+		// 실제 문서에서 w:p ↔ w:tbl 교체로 수십~수백 노드가 elem 1건으로
+		// 접혀도 소비자는 "거의 같다"로 읽는다.
 		rep.add(Diff{Kind: "elem", Scope: scope, Part: part, Path: x.Path,
-			Expected: ptr(x.Type), Actual: ptr(y.Type)})
+			Expected: ptr(x.Type), Actual: ptr(y.Type),
+			Detail: fmt.Sprintf("타입이 다르다 — 그 안은 비교하지 않았다 (기대 %d노드, 실제 %d노드)", x.size, y.size)})
 		return
 	}
 	// 요소가 직접 품은 텍스트다. w:t·a:t 만이 아니라 <Words>17</Words> 도
@@ -223,6 +231,14 @@ func alignChildren(rep *Report, scope, part string, x, y *node) {
 			// 지킨다.** 텍스트만 바뀐 문단은 서브트리 해시가 달라 LCS 매칭에
 			// 실패하지만, 같은 구간에 양쪽 다 남아 짝지어지고 재귀하면 그 안에서
 			// text 차이를 정확히 찾는다.
+			//
+			// 다만 이 구간에 매칭 앵커(양쪽에 똑같은 서브트리)가 하나도 없으면
+			// 이 슬라이스가 없애려던 거짓말의 창이 다시 열린다 — 삽입만 있으면
+			// 뒤에 반드시 앵커가 남아 L1 이 성립하지만, 삽입과 인접 문단 편집이
+			// 겹쳐 구간 전체가 앵커 없이 뭉치면 위치로 짝지어진 두 문단이 서로
+			// 다른 것일 수 있다. 정확 해시 LCS + 위치 짝짓기로는 원리적으로 못
+			// 막는다(유사도 매칭이 필요하며 설계 §3 이 정확 해시를 명시적으로
+			// 선택했다) — 알려진 한계이지 이 구현의 결함이 아니다.
 			la, lb := o.aEnd-o.aStart, o.bEnd-o.bStart
 			m := la
 			if lb < m {
