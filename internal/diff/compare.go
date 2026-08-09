@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -47,6 +48,14 @@ func Compare(expected, actual *parts.Document, expName, actName string, sels []s
 		}
 		compareTrees(rep, "body", pt.Name, et, at)
 	}
+
+	// 선택자를 줬으면 여기서 끝낸다. 슬라이드 하나를 물었는데 레이아웃 16개
+	// 이야기를 듣는 것은 답이 아니다. 그때의 "차이 없음"은 "이 파트에 차이
+	// 없음"이지 "재현됐음"이 아니며, 범위를 좁힌 것은 부른 쪽이다 (설계 §3).
+	if len(sels) > 0 {
+		return rep, nil
+	}
+	compareOtherParts(rep, expected, actual, expName, actName, inActual)
 	return rep, nil
 }
 
@@ -66,6 +75,82 @@ func nameSet(names []string) map[string]bool {
 		m[n] = true
 	}
 	return m
+}
+
+// compareOtherParts 는 계획 밖 파트를 3단으로 거른다 (설계 §5).
+//
+//  1. 압축 해제 후 바이트 비교 — 같으면 항목 없음
+//  2. 다르면 그 파트만 스캔해 본문과 같은 규칙으로 비교
+//  3. 스캔이 안 되면(바이너리·파싱 실패) part_content 하나로 내린다
+//
+// 1단을 압축 바이트로 하지 않는 이유: 그건 "인코딩이 다르다"를 "내용이 다르다"로
+// 말하게 되어, 다른 생산자가 같은 내용을 다르게 압축하면 전부 거짓 양성이 된다.
+//
+// 2단이 없으면 노이즈가 신호를 묻는다 — deck-a vs deck-b 의 계획 밖 차이 16개
+// 중 12개(레이아웃 11 + 마스터)가 순전히 휘발성 ID 다. 주 용도(원본 vs panto 가
+// 패치한 것)에서는 I2 가 바이트 동일을 보장하므로 1단에서 전부 걸리고 스캔은
+// 0번 일어난다.
+func compareOtherParts(rep *Report, expected, actual *parts.Document, expName, actName string, inActual map[string]bool) {
+	planned := make(map[string]bool)
+	for _, pt := range expected.Parts() {
+		planned[pt.Name] = true
+	}
+
+	names := append([]string(nil), expected.Names()...)
+	sort.Strings(names) // 컨테이너 순서가 아니라 사전순 — 사람이 찾기 쉽고 결정론적이다
+
+	for _, n := range names {
+		if planned[n] {
+			continue // 본문 파트는 이미 봤다
+		}
+		if !inActual[n] {
+			rep.add(Diff{Kind: "part_missing", Part: n,
+				Detail: fmt.Sprintf("%s 에만 있다", expName)})
+			continue
+		}
+		xb, err := expected.Bytes(n)
+		if err != nil {
+			rep.add(Diff{Kind: "part_content", Part: n,
+				Detail: fmt.Sprintf("%s 에서 읽지 못했다: %v", expName, err)})
+			continue
+		}
+		yb, err := actual.Bytes(n)
+		if err != nil {
+			rep.add(Diff{Kind: "part_content", Part: n,
+				Detail: fmt.Sprintf("%s 에서 읽지 못했다: %v", actName, err)})
+			continue
+		}
+		if bytes.Equal(xb, yb) {
+			continue // 1단
+		}
+		xt, xerr := expected.ScanAny(n)
+		yt, yerr := actual.ScanAny(n)
+		if xerr != nil || yerr != nil { // 3단
+			rep.add(Diff{Kind: "part_content", Part: n,
+				Detail: fmt.Sprintf("스캔할 수 없어 내용만 비교했다 — 다르다 (길이 %d B vs %d B)",
+					len(xb), len(yb))})
+			continue
+		}
+		before := len(rep.Diffs) // 2단
+		compareTrees(rep, "other", n, xt, yt)
+		if len(rep.Diffs) == before {
+			// 바이트는 다른데 항목이 하나도 안 나왔다 = 차이가 전부 휘발성이었다.
+			// 조용히 넘기면 unzip+diff 로 본 것과 답이 어긋나 보인다.
+			rep.Summary.VolatileOnly++
+		}
+	}
+
+	// 실제에만 있는 파트도 항목이다. 기대에 없는 것을 재현물이 들고 있으면
+	// 그것도 차이다.
+	inExpected := nameSet(expected.Names())
+	actNames := append([]string(nil), actual.Names()...)
+	sort.Strings(actNames)
+	for _, n := range actNames {
+		if !inExpected[n] {
+			rep.add(Diff{Kind: "part_missing", Part: n,
+				Detail: fmt.Sprintf("%s 에만 있다", actName)})
+		}
+	}
 }
 
 // compareTrees 는 두 트리를 위치 정렬(index 대 index)로 비교한다.
