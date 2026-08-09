@@ -153,58 +153,103 @@ func compareOtherParts(rep *Report, expected, actual *parts.Document, expName, a
 	}
 }
 
-// compareTrees 는 두 트리를 위치 정렬(index 대 index)로 비교한다.
+// compareTrees 는 두 트리를 정렬해 비교한다.
 //
-// 경로가 갈리면 structure 항목 하나를 내고 **이 파트만** 멈춘다. 정렬 없이
-// 계속 가면 그 뒤 전부가 어긋난 쌍이라 항목이 폭발한다. 다른 파트는 계속 본다 —
-// 문단 하나 때문에 문서 전체를 못 보게 되면 보정 루프에서 쓸 수 없다.
+// 위치 정렬(index 대 index)을 쓰지 않는 이유: 삽입이 하나만 일어나도 그 뒤의
+// 모든 노드가 서로 다른 것과 짝지어져, 문단을 끼워 넣었을 뿐인데 "이 텍스트가
+// 저 텍스트로 바뀌었다"는 **거짓 항목**을 낸다. 포기하기 전에 거짓말을 한다.
 //
-// LCS 정렬로 삽입·삭제·변경을 구분하는 것은 범위 밖이다(설계 §4). 그때 갈아끼울
-// 곳은 여기 노드 쌍을 만드는 부분뿐이고, 아래 비교는 그대로 쓴다.
+// 노드 한 쌍의 비교는 예전 그대로다 — 바뀌는 것은 짝을 만드는 방법뿐이다.
 func compareTrees(rep *Report, scope, part string, a, b *xmlscan.Tree) {
-	n := len(a.Nodes)
-	if len(b.Nodes) < n {
-		n = len(b.Nodes)
+	ra, rb := buildTree(a), buildTree(b)
+	if ra == nil && rb == nil {
+		return
 	}
-	for i := 0; i < n; i++ {
-		x, y := a.Nodes[i], b.Nodes[i]
-		if x.Path != y.Path {
-			rep.add(Diff{Kind: "structure", Scope: scope, Part: part, Path: x.Path,
-				Detail: fmt.Sprintf("경로가 갈린다 — 기대 %s, 실제 %s. 이 파트의 이후 노드는 비교하지 않았다",
-					x.Path, y.Path)})
-			return
-		}
-		if x.Type != y.Type {
-			rep.add(Diff{Kind: "elem", Scope: scope, Part: part, Path: x.Path,
-				Expected: ptr(x.Type), Actual: ptr(y.Type)})
-			continue
-		}
-		// 요소가 직접 품은 텍스트다. w:t·a:t 만이 아니라 <Words>17</Words> 도
-		// 여기 걸린다 — docProps 를 비교하려면 그래야 한다.
-		// 공백을 다듬지 않는다: xml:space="preserve" 인 w:t 의 끝 공백은 내용이다.
-		if x.Text != y.Text {
-			rep.add(Diff{Kind: "text", Scope: scope, Part: part, Path: x.Path,
-				Expected: ptr(x.Text), Actual: ptr(y.Text)})
-		}
-		compareAttrs(rep, scope, part, x, y)
-	}
-	if len(a.Nodes) != len(b.Nodes) {
+	if ra == nil || rb == nil {
+		// 한쪽 파트가 비었다. 스캔이 성공했으면 루트는 있으므로 실제로는
+		// 오지 않지만, 조용히 넘어가면 빈 파트가 "같다"로 보고된다.
 		rep.add(Diff{Kind: "structure", Scope: scope, Part: part,
-			Path: lastPath(a, b, n),
-			Detail: fmt.Sprintf("노드 수가 다르다 — 기대 %d개, 실제 %d개. 앞의 %d개까지만 비교했다",
-				len(a.Nodes), len(b.Nodes), n)})
+			Detail: "한쪽 파트에 노드가 없다"})
+		return
+	}
+	sign(ra)
+	sign(rb)
+	comparePair(rep, scope, part, ra, rb)
+}
+
+// comparePair 는 짝지어진 노드 한 쌍을 비교하고 그 자식들을 정렬한다.
+func comparePair(rep *Report, scope, part string, x, y *node) {
+	if x.Type != y.Type {
+		// 같은 자리에 다른 요소가 있다. 그 안을 파고들지 않는다 — 서로 다른
+		// 요소의 자식을 비교하면 항목만 늘고 뜻은 없다.
+		rep.add(Diff{Kind: "elem", Scope: scope, Part: part, Path: x.Path,
+			Expected: ptr(x.Type), Actual: ptr(y.Type)})
+		return
+	}
+	// 요소가 직접 품은 텍스트다. w:t·a:t 만이 아니라 <Words>17</Words> 도
+	// 여기 걸린다 — docProps 를 비교하려면 그래야 한다.
+	// 공백을 다듬지 않는다: xml:space="preserve" 인 w:t 의 끝 공백은 내용이다.
+	if x.Text != y.Text {
+		rep.add(Diff{Kind: "text", Scope: scope, Part: part, Path: x.Path,
+			Expected: ptr(x.Text), Actual: ptr(y.Text)})
+	}
+	compareAttrs(rep, scope, part, x.Node, y.Node)
+	alignChildren(rep, scope, part, x, y)
+}
+
+// alignChildren 은 두 노드의 자식 목록을 정렬하고 구간마다 처리한다.
+func alignChildren(rep *Report, scope, part string, x, y *node) {
+	ops, capped := alignSiblings(x.kids, y.kids)
+	if capped {
+		rep.add(Diff{Kind: "structure", Scope: scope, Part: part, Path: x.Path,
+			Detail: fmt.Sprintf("자식이 너무 많아 정렬을 포기하고 위치로 비교했다 — 기대 %d개, 실제 %d개",
+				len(x.kids), len(y.kids))})
+	}
+	for _, o := range ops {
+		switch o.tag {
+		case 'e':
+			// 서브트리가 통째로 같다. 내려가지 않는다 — 같은 부분은 아예
+			// 순회하지 않는다는 뜻이라 부수적으로 빨라진다.
+		case 'i':
+			for j := o.bStart; j < o.bEnd; j++ {
+				rep.add(subtreeDiff("inserted", scope, part, y.kids[j]))
+			}
+		case 'd':
+			for i := o.aStart; i < o.aEnd; i++ {
+				rep.add(subtreeDiff("deleted", scope, part, x.kids[i]))
+			}
+		case 'r':
+			// 양쪽에 남았다. 위치로 짝지어 재귀한다 — **이 분기가 기존 결과를
+			// 지킨다.** 텍스트만 바뀐 문단은 서브트리 해시가 달라 LCS 매칭에
+			// 실패하지만, 같은 구간에 양쪽 다 남아 짝지어지고 재귀하면 그 안에서
+			// text 차이를 정확히 찾는다.
+			la, lb := o.aEnd-o.aStart, o.bEnd-o.bStart
+			m := la
+			if lb < m {
+				m = lb
+			}
+			for k := 0; k < m; k++ {
+				comparePair(rep, scope, part, x.kids[o.aStart+k], y.kids[o.bStart+k])
+			}
+			for i := o.aStart + m; i < o.aEnd; i++ {
+				rep.add(subtreeDiff("deleted", scope, part, x.kids[i]))
+			}
+			for j := o.bStart + m; j < o.bEnd; j++ {
+				rep.add(subtreeDiff("inserted", scope, part, y.kids[j]))
+			}
+		}
 	}
 }
 
-// lastPath 는 노드 수가 갈릴 때 가리킬 경로다 — 더 긴 쪽의 첫 초과 노드.
-func lastPath(a, b *xmlscan.Tree, n int) string {
-	if len(a.Nodes) > n {
-		return a.Nodes[n].Path
+// subtreeDiff 는 서브트리 하나가 통째로 있고 없는 항목을 만든다.
+// 경로는 그 서브트리가 실제로 있는 쪽 기준이다 — deleted 면 기대, inserted 면 실제.
+func subtreeDiff(kind, scope, part string, n *node) Diff {
+	side := "실제"
+	if kind == "deleted" {
+		side = "기대"
 	}
-	if len(b.Nodes) > n {
-		return b.Nodes[n].Path
-	}
-	return ""
+	return Diff{Kind: kind, Scope: scope, Part: part, Path: n.Path,
+		Detail: fmt.Sprintf("%s 에만 있는 서브트리 — 노드 %d개", side, n.size)}
 }
 
 // compareAttrs 는 속성 이름의 합집합을 돌며 다른 것마다 항목을 하나씩 낸다.

@@ -25,10 +25,19 @@ type Diff struct {
 
 // Summary 는 kind 별 개수다. 벤치마크 임계는 이 위에 세워진다.
 type Summary struct {
-	Text        int `json:"text"`
-	Attr        int `json:"attr"`
-	Elem        int `json:"elem"`
-	Structure   int `json:"structure"`
+	Text int `json:"text"`
+	Attr int `json:"attr"`
+	Elem int `json:"elem"`
+	// Structure 는 **정렬을 포기하고 위치로 비교한** 형제 목록의 수다.
+	// 형제가 상한(align.go 의 maxCells)을 넘을 때만 난다. 실제 문서에서는
+	// 사실상 0 이다. 예전에는 "구조가 갈려 그 파트를 포기했다"는 뜻이었으나
+	// LCS 정렬이 들어오면서 포기하는 일이 없어졌다.
+	Structure int `json:"structure"`
+	// Inserted·Deleted 는 **서브트리당 1건**이다. 문단 하나는 노드 3개
+	// (w:p·w:r·w:t)이고 실제 문서에서는 10~20개다 — 노드마다 세면 문단 하나에
+	// 수십 건이 된다. 항목의 detail 이 노드 수를 알린다.
+	Inserted    int `json:"inserted"`
+	Deleted     int `json:"deleted"`
 	PartContent int `json:"part_content"`
 	PartMissing int `json:"part_missing"`
 	Total       int `json:"total"`
@@ -60,6 +69,10 @@ func (r *Report) add(d Diff) {
 		r.Summary.Elem++
 	case "structure":
 		r.Summary.Structure++
+	case "inserted":
+		r.Summary.Inserted++
+	case "deleted":
+		r.Summary.Deleted++
 	case "part_content":
 		r.Summary.PartContent++
 	case "part_missing":

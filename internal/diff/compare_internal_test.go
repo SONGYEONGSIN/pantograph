@@ -1,7 +1,6 @@
 package diff
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
@@ -148,51 +147,89 @@ func TestCompareTreesPreservesTrailingWhitespace(t *testing.T) {
 	}
 }
 
-// TestCompareTreesDivergingPathStopsAtStructure 는 최종 리뷰 Important 지적을
-// 잠근다 — 설계 §4 의 핵심 분기("경로가 갈린다 — 이 파트는 여기서 중단")가
-// 커버리지 0이었다. 기존 TestPartMissingAndStructure(compare_test.go)는 이름과
-// 달리 **노드 수** 분기만 타고("노드 수가 다르다"), **경로**가 갈리는 분기는
-// 한 번도 실행되지 않았다.
+// TestCompareTreesAlignsAcrossDeletionAndFindsDownstreamText 는
+// TestCompareTreesDivergingPathStopsAtStructure(최종 리뷰 Important 지적으로
+// 커버리지 0이던 "경로가 갈리면 멈춘다" 분기를 잠갔던 테스트)를 대체한다 — 그
+// 분기 자체가 이 슬라이스로 없어졌다. LCS 정렬은 갈린 지점을 건너뛰고 뒤를
+// 계속 본다.
 //
-// 두 트리를 인덱스 2에서 요소 타입 자체가 갈리게(p → tbl) 만든다 — 그래서
-// x.Path("document/p[2]") 와 y.Path("document/tbl[1]") 가 달라진다. 그 뒤
-// (인덱스 3)에 눈에 띄는 텍스트 차이를 심어 둔다: 갈린 지점에서 정말 멈췄다면
-// 이 텍스트 차이는 항목으로 나올 수 없다 — 나온다면 "이후 노드는 비교하지
-// 않았다"는 설계·Detail 문구가 거짓이라는 뜻이다.
-func TestCompareTreesDivergingPathStopsAtStructure(t *testing.T) {
+// 옛 테스트처럼 1대1 타입 교체(p → tbl)는 여기 안 쓴다 — 개수가 같은 교체는
+// alignMiddle 의 gap() 이 항상 하나의 'r' 구간으로 묶어 comparePair 로 넘기고,
+// 타입이 다르면 elem 하나를 내고 내려가지 않는다(설계 결정 — 서로 다른 요소의
+// 자식을 비교하면 항목만 늘고 뜻이 없다). 그래서 1대1 교체로는 inserted/deleted
+// 가 나올 수 없다 — 개수가 달라야 한다.
+//
+// 대신 a 에만 있는 문단 하나("사라질문단")를 심어 개수를 갈리게 하고, 그 뒤에
+// 양쪽에 동일한 "고정문단"을 재동기화 지점으로 둔 다음, 그 뒤에 텍스트만 다른
+// "바뀐값" 문단을 둔다. "고정문단"이 없으면 개수가 안 맞는 가운데 구간 전체가
+// 위치로 뭉뚱그려진 'r' 구간 하나가 되어 "사라질문단"과 "바뀐값-실제"가 잘못
+// 짝지어진다 — LCS 가 "고정문단"을 정확히 매칭해야 "사라질문단"은 단독 deleted
+// 로, "바뀐값" 쌍은 단독 'r'(재귀 비교) 로 갈린다.
+//
+// 세 가지를 확인한다:
+//
+//	(a) structure 가 0건이다 — 상한을 넘지 않는 한 정렬은 포기하지 않는다.
+//	(b) 갈린 지점(a 에만 있는 "사라질문단")이 deleted 로 잡힌다.
+//	(c) 그 뒤에 심어둔 텍스트 차이가 발견된다 — 옛 코드라면 갈린 지점에서
+//	    멈춰 이 텍스트 차이를 절대 볼 수 없었다.
+//
+// buildTree 는 Span 포함 관계로 부모·자식을 구성하므로(align.go 주석) 노드마다
+// 실제 Span 을 채운다 — Path 문자열만으로는 트리가 재구성되지 않는다.
+func TestCompareTreesAlignsAcrossDeletionAndFindsDownstreamText(t *testing.T) {
 	a := &xmlscan.Tree{Nodes: []xmlscan.Node{
-		{Path: "document/p[1]", Type: "p"},
-		{Path: "document/p[1]/t[1]", Type: "t", Text: "첫문단"},
-		{Path: "document/p[2]", Type: "p"},                       // 여기서 갈린다
-		{Path: "document/p[2]/t[1]", Type: "t", Text: "둘째문단-기대"}, // 비교되면 안 된다
+		{Path: "document", Type: "document", Span: xmlscan.Span{Start: 0, End: 100}},
+		{Path: "document/p[1]", Type: "p", Text: "첫문단", Span: xmlscan.Span{Start: 1, End: 10}},
+		{Path: "document/p[2]", Type: "p", Text: "사라질문단", Span: xmlscan.Span{Start: 11, End: 20}}, // a 에만 있다
+		{Path: "document/p[3]", Type: "p", Text: "고정문단", Span: xmlscan.Span{Start: 21, End: 30}},  // 재동기화 지점
+		{Path: "document/p[4]", Type: "p", Text: "바뀐값-기대", Span: xmlscan.Span{Start: 31, End: 40}},
 	}}
 	b := &xmlscan.Tree{Nodes: []xmlscan.Node{
-		{Path: "document/p[1]", Type: "p"},
-		{Path: "document/p[1]/t[1]", Type: "t", Text: "첫문단"},
-		{Path: "document/tbl[1]", Type: "tbl"}, // p 대신 tbl — 경로 자체가 다르다
-		{Path: "document/tbl[1]/t[1]", Type: "t", Text: "둘째문단-실제"},
+		{Path: "document", Type: "document", Span: xmlscan.Span{Start: 0, End: 100}},
+		{Path: "document/p[1]", Type: "p", Text: "첫문단", Span: xmlscan.Span{Start: 1, End: 10}},
+		{Path: "document/p[2]", Type: "p", Text: "고정문단", Span: xmlscan.Span{Start: 21, End: 30}},
+		{Path: "document/p[3]", Type: "p", Text: "바뀐값-실제", Span: xmlscan.Span{Start: 31, End: 40}},
 	}}
 
 	rep := &Report{}
 	compareTrees(rep, "body", "test.xml", a, b)
 
-	if len(rep.Diffs) != 1 {
-		t.Fatalf("structure 항목이 정확히 1개여야 하는데 %d개다 (뒤 텍스트 차이가 새어나왔다면 2개가 된다): %+v",
-			len(rep.Diffs), rep.Diffs)
+	if rep.Summary.Structure != 0 {
+		t.Fatalf("structure=%d (기대 0 — 상한을 안 넘었으니 정렬을 포기하지 않는다): %+v",
+			rep.Summary.Structure, rep.Diffs)
 	}
-	d := rep.Diffs[0]
-	if d.Kind != "structure" {
-		t.Fatalf("kind=%q (기대 structure)", d.Kind)
+	if rep.Summary.Deleted != 1 {
+		t.Fatalf("deleted=%d (기대 1 — a 에만 있는 '사라질문단'): %+v", rep.Summary.Deleted, rep.Diffs)
 	}
-	if !strings.Contains(d.Detail, "경로가 갈린다") || !strings.Contains(d.Detail, "비교하지 않았다") {
-		t.Fatalf("detail 이 두 문구를 다 담지 않는다: %q", d.Detail)
-	}
-	// 갈린 지점 이후(인덱스 3, "둘째문단-기대" vs "둘째문단-실제")는 비교되지
-	// 않아야 한다 — 항목이 1개뿐이라는 위 검사가 이미 이를 함의하지만,
-	// text kind 가 하나도 없다는 것을 명시적으로 다시 확인한다.
-	for _, dd := range rep.Diffs {
-		if dd.Kind == "text" {
-			t.Fatalf("갈린 지점 이후 노드가 비교됐다: %+v", dd)
+	var del *Diff
+	for i := range rep.Diffs {
+		if rep.Diffs[i].Kind == "deleted" {
+			del = &rep.Diffs[i]
 		}
+	}
+	if del == nil || del.Path != "document/p[2]" {
+		t.Fatalf("deleted 항목이 없거나 경로가 다르다: %+v", rep.Diffs)
+	}
+
+	if rep.Summary.Text != 1 {
+		t.Fatalf("text=%d (기대 1 — 갈린 지점 뒤 '바뀐값' 문단의 텍스트 차이): %+v",
+			rep.Summary.Text, rep.Diffs)
+	}
+	var txt *Diff
+	for i := range rep.Diffs {
+		if rep.Diffs[i].Kind == "text" {
+			txt = &rep.Diffs[i]
+		}
+	}
+	if txt == nil {
+		t.Fatal("text 항목이 없다 — 갈린 지점 뒤가 비교되지 않았다는 뜻이다")
+	}
+	if txt.Expected == nil || *txt.Expected != "바뀐값-기대" {
+		t.Fatalf("expected=%v (기대 %q)", txt.Expected, "바뀐값-기대")
+	}
+	if txt.Actual == nil || *txt.Actual != "바뀐값-실제" {
+		t.Fatalf("actual=%v (기대 %q)", txt.Actual, "바뀐값-실제")
+	}
+	if len(rep.Diffs) != 2 {
+		t.Fatalf("항목이 %d개다 (기대 2 — deleted 1 + text 1): %+v", len(rep.Diffs), rep.Diffs)
 	}
 }
