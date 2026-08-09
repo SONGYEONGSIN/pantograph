@@ -2,11 +2,26 @@ package parts_test
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/parts"
 )
+
+func openDoc(t *testing.T, name string) *parts.Document {
+	t.Helper()
+	p, err := opc.Open(filepath.Join("..", "..", "testdata", "real", name))
+	if err != nil {
+		t.Fatalf("Open %s: %v", name, err)
+	}
+	d, err := parts.Open(p)
+	if err != nil {
+		t.Fatalf("parts.Open %s: %v", name, err)
+	}
+	return d
+}
 
 func TestDocumentLazyScan(t *testing.T) {
 	d, err := parts.Open(openReal(t, "deck-a.pptx"))
@@ -196,5 +211,55 @@ func TestSelectRejectionReasons(t *testing.T) {
 		if !strings.Contains(se.Error(), c.sel) {
 			t.Errorf("%s: 오류가 선택자를 지목하지 않는다: %v", c.sel, se)
 		}
+	}
+}
+
+// TestBytesReadsPartOutsideThePlan 은 계획 밖 파트의 내용을 읽을 수 있는지 본다.
+func TestBytesReadsPartOutsideThePlan(t *testing.T) {
+	d := openDoc(t, "deck-a.pptx")
+	b, err := d.Bytes("ppt/theme/theme1.xml")
+	if err != nil {
+		t.Fatalf("계획 밖 파트를 못 읽는다: %v", err)
+	}
+	if len(b) == 0 {
+		t.Fatal("내용이 비었다")
+	}
+	if _, err := d.Bytes("ppt/nope.xml"); err == nil {
+		t.Fatal("없는 파트가 읽혔다")
+	}
+}
+
+// TestScanAnyUsesRootLocalName 은 계획 밖 파트를 루트 요소의 로컬명으로
+// 스캔하는지 본다.
+//
+// Tree 는 계획에서 루트 별칭을 가져오는데 계획 밖 파트에는 그 값이 없다.
+// 루트 요소의 로컬명을 쓰는 것은 multipart 설계가 통일한 규약이다.
+func TestScanAnyUsesRootLocalName(t *testing.T) {
+	d := openDoc(t, "deck-a.pptx")
+	tr, err := d.ScanAny("ppt/theme/theme1.xml")
+	if err != nil {
+		t.Fatalf("ScanAny: %v", err)
+	}
+	if len(tr.Nodes) == 0 {
+		t.Fatal("노드가 없다")
+	}
+	if tr.Nodes[0].Path != "theme" {
+		t.Fatalf("루트 경로가 %q (기대 %q) — 루트 요소는 <a:theme> 다", tr.Nodes[0].Path, "theme")
+	}
+	if tr.Nodes[0].Part != "ppt/theme/theme1.xml" {
+		t.Fatalf("Part 가 안 채워졌다: %q", tr.Nodes[0].Part)
+	}
+	// 계획 밖 스캔은 계획의 일부가 아니므로 지연 스캔 장부를 오염시키면 안 된다.
+	if got := d.Loaded(); len(got) != 0 {
+		t.Fatalf("계획 밖 스캔이 Loaded 에 남았다: %v", got)
+	}
+}
+
+// TestScanAnyRejectsNonXML 은 XML 이 아닌 파트를 에러로 돌려주는지 본다.
+// 호출자(diff)가 이 에러를 보고 part_content 로 내린다.
+func TestScanAnyRejectsNonXML(t *testing.T) {
+	d := openDoc(t, "deck-a.pptx")
+	if _, err := d.ScanAny("docProps/thumbnail.jpeg"); err == nil {
+		t.Fatal("jpeg 이 스캔됐다")
 	}
 }
