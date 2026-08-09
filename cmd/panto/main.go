@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/SONGYEONGSIN/pantograph/internal/diff"
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/parts"
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
@@ -36,6 +37,7 @@ func usage() {
 
 사용법:
   panto dump  <in.docx|in.pptx> [--part <선택자>]
+  panto diff  <expected> <actual> [--part <선택자>]
   panto apply <in.docx|in.pptx> -p <patch.json> -o <out>
   panto tmpl extract <a> <b> [...] -o <tmpl> --schema <schema.json>
   panto tmpl fill    <tmpl> --schema <schema.json> -d <data.json> -o <out>
@@ -91,6 +93,7 @@ func decodeStrict(b []byte, v any) error {
 // classify 는 오류가 stdout JSON 으로 보고할 **입력 부류**인지 가르고 그 reason 을 낸다.
 //
 //	*opc.UnsupportedError       → unsupported_container  (컨테이너를 바이트 동일하게 재현할 수 없다)
+//	diff.ErrFormatMismatch      → format_mismatch        (docx 와 pptx 를 비교할 수 없다)
 //	parts.ErrUnsupportedFormat  → unsupported_format     (Plan 의 모든 실패가 이것을 감싼다)
 //	*parts.SelectError          → 그 Reason              (part_not_found | ref_not_found | part_not_scannable)
 //	그 외                        → 보고 불가 → 내부 오류(코드 2)
@@ -115,6 +118,9 @@ func classify(err error) (reason, detail string, ok bool) {
 	var se *parts.SelectError
 	if errors.As(err, &se) {
 		return se.Reason, se.Detail, true
+	}
+	if errors.Is(err, diff.ErrFormatMismatch) {
+		return "format_mismatch", err.Error(), true
 	}
 	if errors.Is(err, parts.ErrUnsupportedFormat) {
 		return "unsupported_format", err.Error(), true
@@ -201,6 +207,8 @@ func main() {
 	switch os.Args[1] {
 	case "dump":
 		os.Exit(cmdDump(os.Args[2:]))
+	case "diff":
+		os.Exit(cmdDiff(os.Args[2:]))
 	case "apply":
 		os.Exit(cmdApply(os.Args[2:]))
 	case "tmpl":

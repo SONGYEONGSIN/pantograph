@@ -603,3 +603,73 @@ func TestRejectsTrailingJSON(t *testing.T) {
 		})
 	}
 }
+
+// TestDiffSelfIsEmptyAndExitsZero 는 차이가 없어도, 있어도 종료 코드가 0 인지 본다.
+// 차이는 결과지 오류가 아니다 — 코드에 세 번째 뜻을 섞으면 에이전트의 재시도
+// 판단이 흐려진다 (설계 §3).
+func TestDiffSelfIsEmptyAndExitsZero(t *testing.T) {
+	deck := filepath.Join("..", "..", "testdata", "real", "deck-a.pptx")
+	var code int
+	stdout := captureStdout(t, func() { code = cmdDiff([]string{deck, deck}) })
+	if code != exitOK {
+		t.Fatalf("exit=%d (기대 0), stdout=%s", code, stdout)
+	}
+	if !strings.Contains(stdout, `"total": 0`) {
+		t.Fatalf("total 이 0 이 아니다: %s", stdout)
+	}
+}
+
+func TestDiffWithDifferencesStillExitsZero(t *testing.T) {
+	a := filepath.Join("..", "..", "testdata", "real", "deck-a.pptx")
+	b := filepath.Join("..", "..", "testdata", "real", "deck-b.pptx")
+	var code int
+	stdout := captureStdout(t, func() { code = cmdDiff([]string{a, b}) })
+	if code != exitOK {
+		t.Fatalf("차이가 있는데 exit=%d (기대 0), stdout=%s", code, stdout)
+	}
+	if !strings.Contains(stdout, `"kind": "text"`) {
+		t.Fatalf("text 항목이 없다: %s", stdout)
+	}
+}
+
+// TestDiffFormatMismatchIsInputError 는 docx 와 pptx 비교가 코드 1 + stdout
+// JSON 으로 보고되는지 본다.
+func TestDiffFormatMismatchIsInputError(t *testing.T) {
+	doc := filepath.Join("..", "..", "testdata", "real", "form-a.docx")
+	deck := filepath.Join("..", "..", "testdata", "real", "deck-a.pptx")
+	var code int
+	stdout := captureStdout(t, func() { code = cmdDiff([]string{doc, deck}) })
+	if code != exitInput {
+		t.Fatalf("exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "format_mismatch") {
+		t.Fatalf("stdout 에 format_mismatch 가 없다: %s", stdout)
+	}
+}
+
+// TestDiffBadSelectorIsInputError 는 선택자 오타가 dump 와 같은 사유로
+// 거절되는지 본다. 같은 질문에 두 명령이 다른 답을 내면 안 된다.
+func TestDiffBadSelectorIsInputError(t *testing.T) {
+	deck := filepath.Join("..", "..", "testdata", "real", "deck-a.pptx")
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdDiff([]string{deck, deck, "--part", "ppt/theme/*"})
+	})
+	if code != exitInput {
+		t.Fatalf("exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "part_not_scannable") {
+		t.Fatalf("stdout 에 part_not_scannable 이 없다: %s", stdout)
+	}
+}
+
+// TestDiffNeedsTwoInputs 는 인자 수가 틀리면 사용법을 내는지 본다.
+func TestDiffNeedsTwoInputs(t *testing.T) {
+	deck := filepath.Join("..", "..", "testdata", "real", "deck-a.pptx")
+	if code := cmdDiff([]string{deck}); code != exitInput {
+		t.Fatalf("인자 하나인데 exit=%d (기대 %d)", code, exitInput)
+	}
+	if code := cmdDiff([]string{deck, deck, deck}); code != exitInput {
+		t.Fatalf("인자 셋인데 exit=%d (기대 %d)", code, exitInput)
+	}
+}
