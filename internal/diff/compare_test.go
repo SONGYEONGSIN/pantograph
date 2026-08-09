@@ -9,6 +9,7 @@ import (
 	"github.com/SONGYEONGSIN/pantograph/internal/diff"
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/parts"
+	"github.com/SONGYEONGSIN/pantograph/internal/patch"
 	"github.com/SONGYEONGSIN/pantograph/internal/testutil"
 )
 
@@ -255,5 +256,66 @@ func TestPartMissingAndStructure(t *testing.T) {
 	// "part_missing 은 이 합성 쌍으로도 안 난다"는 설명도 같은 사실을 전제한다.
 	if st == nil || !strings.Contains(st.Detail, "노드 수가 다르다") {
 		t.Fatalf("structure 항목이 '노드 수가 다르다'를 말하지 않는다: %+v", st)
+	}
+}
+
+// TestD3LocalityOfPatchedDocument 는 apply 로 한 곳만 고친 문서를 원본과
+// 비교하면 그 한 곳만 나오는지 본다.
+//
+// 설계 §5 의 핵심 주장을 증명한다 — 주 용도(원본 vs panto 가 패치한 것)에서는
+// I2(국소성) 덕에 계획 밖 파트가 바이트 동일이라 노이즈가 0 이다. 이것이 말이
+// 아니라 테스트여야 §5 의 3단 거르기가 정당해진다.
+func TestD3LocalityOfPatchedDocument(t *testing.T) {
+	src := filepath.Join("..", "..", "testdata", "real", "deck-a.pptx")
+	orig, err := opc.Open(src)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	patched, err := opc.OpenBytes(orig.Source())
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	const target = "sld/cSld[1]/spTree[1]/sp[1]/txBody[1]/p[1]/r[1]/t[1]"
+	errs, err := patch.Apply(patched, patch.Patch{Ops: []patch.Op{{
+		Op: "setText", Part: "pptx/slide[2]", Path: target, Text: "바뀐 제목",
+	}}})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) > 0 {
+		t.Fatalf("패치가 거절됐다: %+v", errs)
+	}
+	out, err := patched.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+	np, err := opc.OpenBytes(out)
+	if err != nil {
+		t.Fatalf("결과 열기: %v", err)
+	}
+	ed, err := parts.Open(orig)
+	if err != nil {
+		t.Fatalf("parts.Open 원본: %v", err)
+	}
+	ad, err := parts.Open(np)
+	if err != nil {
+		t.Fatalf("parts.Open 결과: %v", err)
+	}
+
+	rep, err := diff.Compare(ed, ad, "원본", "패치본", nil)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	want := diff.Summary{Text: 1, Total: 1}
+	if rep.Summary != want {
+		t.Fatalf("요약이 다르다\n  실제 %+v\n  기대 %+v\n  항목: %+v",
+			rep.Summary, want, rep.Diffs)
+	}
+	d := rep.Diffs[0]
+	if d.Scope != "body" || d.Part != "ppt/slides/slide2.xml" || d.Path != target {
+		t.Fatalf("엉뚱한 곳을 짚는다: %+v", d)
+	}
+	if d.Actual == nil || *d.Actual != "바뀐 제목" {
+		t.Fatalf("actual=%v (기대 %q)", d.Actual, "바뀐 제목")
 	}
 }
