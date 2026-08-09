@@ -89,6 +89,18 @@
 #      part_content 로 내려간다 — 그건 별개 경로다). 즉 이 오라클로
 #      `structure` 를 검증할 수는 없다 — 그 경로는 합성 트리 단위
 #      테스트(align_test.go/compare_internal_test.go)의 몫이다.
+#
+#   5. 텍스트 공백 처리는 설계 문서가 아니라 Go 구현을 참고했다. compare_pair()
+#      와 subtree_sig() 는 직접 텍스트를 `.strip()` 없이 raw 로 비교한다(옛
+#      오라클의 sig() 는 `.strip()` 을 썼었다). 이 결정은 LCS 설계 문서(§3·
+#      §6 어디에도 텍스트 공백 처리를 정하는 문장이 없다)를 따른 게 아니라
+#      `internal/diff/compare.go:199` 의 주석("공백을 다듬지 않는다:
+#      xml:space="preserve" 인 w:t 의 끝 공백은 내용이다")을 보고 맞춘 것이다
+#      — **설계가 침묵한 영역에서 Go 의 동작을 참고했다는 뜻이라, 이 지점은
+#      독립 검증이 아니다.** 두 픽스처에서는 strip 유무가 결과를 바꾸지
+#      않음을 확인했다(전 필드 동일) — 그래서 값은 안전하지만, "독립적으로
+#      짠 오라클"이라는 주장이 이 한 조각에서는 얇아진다는 사실은 숨기지
+#      않는다.
 import difflib
 import zipfile
 import xml.etree.ElementTree as ET

@@ -220,10 +220,12 @@ func Compare(expected, actual *parts.Document, sels []string) (*Report, error)
 
 그 비교기는 `docs/superpowers/specs/oracle/diff-count.py` 에 있다(저장소 루트에서 `python3 docs/superpowers/specs/oracle/diff-count.py`로 재현). **한계**: 파이썬 `xml.etree` 는 네임스페이스 선언·속성의 네임스페이스를 xmlscan 과 다르게 다뤄, 이 오라클은 속성을 로컬명만으로 비교한다 — 그래서 최종 리뷰가 찾은 attrMap 의 네임스페이스 충돌 결함을 이 오라클도 똑같이 못 잡는다(픽스처의 `sldId`/`sldLayoutId` 값이 두 파일에서 같아 우연히 드러나지 않았을 뿐이다). 스크립트 머리말에 이 한계와 `.text`/`.tail` 모델 차이를 더 자세히 적어 뒀다.
 
-| | `text` | `attr` | `elem` | `structure` | `part_content` | `total` | `volatile_only` |
-|---|---|---|---|---|---|---|---|
-| form-a vs form-b | 5 | 2 | 0 | 0 | 0 | 7 | 1 |
-| deck-a vs deck-b | 11 | 0 | 0 | 1 | 1 | 13 | 12 |
+**아래 수치는 [LCS 정렬 설계](2026-08-10-lcs-align-design.md) 이후 값이다.** 그 이전(위치 정렬) 값은 deck 행 기준 `structure 1`·`deleted 0` 이었다 — 총량(`total`·`volatile_only`)은 안 바뀌고 deck 의 `ppt/presentation.xml` 차이 1건이 `structure` 에서 `deleted` 로 종류만 바뀐다(LCS 설계 §7 의 예측대로다).
+
+| | `text` | `attr` | `elem` | `structure` | `inserted` | `deleted` | `part_content` | `total` | `volatile_only` |
+|---|---|---|---|---|---|---|---|---|---|
+| form-a vs form-b | 5 | 2 | 0 | 0 | 0 | 0 | 0 | 7 | 1 |
+| deck-a vs deck-b | 11 | 0 | 0 | 0 | 0 | 1 | 1 | 13 | 12 |
 
 내역:
 
@@ -236,7 +238,7 @@ func Compare(expected, actual *parts.Document, sels []string) (*Report, error)
 | deck | `ppt/slides/slide1~3.xml` | body | `text` 각 1 |
 | | `docProps/app.xml` | other | `text` 5 |
 | | `docProps/core.xml` | other | `text` 3 (수정자·개정·시각) |
-| | `ppt/presentation.xml` | other | `structure` 1 (안내선 `p:extLst` 유무) |
+| | `ppt/presentation.xml` | other | `deleted` 1 (안내선 `p:extLst` — deck-a 에만 있다) |
 | | `docProps/thumbnail.jpeg` | other | `part_content` 1 (스캔 불가) |
 | | 레이아웃 11 + 마스터 1 | other | 없음 → `volatile_only` 12 |
 
