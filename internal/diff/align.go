@@ -96,3 +96,135 @@ func stableAttrTriples(n xmlscan.Node) [][3]string {
 	})
 	return out
 }
+
+// maxCells 는 LCS DP 표의 칸 수 상한이다.
+//
+// 표가 형제 수의 곱이라 입력 XML 이 작업량·메모리를 곱으로 부풀릴 수 있다 —
+// plan.go 가 sldIdLst 중복으로 이미 막아둔 부류와 같다. 400만 칸은 int32 로
+// 16MB 이고, 형제 하나가 2000개까지 정상 처리한다는 뜻이다(실측 최대치
+// form-a 의 376개보다 5배 넉넉하다).
+const maxCells = 4_000_000
+
+// op 는 정렬 결과의 한 구간이다. 인덱스는 원래 형제 목록 기준이다.
+//
+//	'e' 두 서브트리가 통째로 같다 — 내려가지 않는다
+//	'i' 실제에만 있다 — inserted
+//	'd' 기대에만 있다 — deleted
+//	'r' 양쪽에 남았다 — 위치로 짝짓고 재귀한다
+type op struct {
+	tag                        byte
+	aStart, aEnd, bStart, bEnd int
+}
+
+// alignSiblings 는 두 형제 목록을 정렬한다.
+//
+// 두 번째 반환값은 **상한을 넘어 정렬을 포기했는지**다. 호출자는 그 사실을
+// 항목으로 내야 한다 — 조용히 위치 정렬로 떨어지면 사용자는 정렬이 돌았다고
+// 믿는다.
+func alignSiblings(a, b []*node) ([]op, bool) {
+	// 앞 공통 — 실제 문서는 대부분 여기서 대부분이 걸린다.
+	p := 0
+	for p < len(a) && p < len(b) && a[p].sig == b[p].sig {
+		p++
+	}
+	// 뒤 공통. 앞에서 이미 센 것을 다시 세지 않도록 남은 길이로 막는다.
+	s := 0
+	for s < len(a)-p && s < len(b)-p && a[len(a)-1-s].sig == b[len(b)-1-s].sig {
+		s++
+	}
+
+	var ops []op
+	if p > 0 {
+		ops = append(ops, op{tag: 'e', aStart: 0, aEnd: p, bStart: 0, bEnd: p})
+	}
+	mid, capped := alignMiddle(a[p:len(a)-s], b[p:len(b)-s], p, p)
+	ops = append(ops, mid...)
+	if s > 0 {
+		ops = append(ops, op{tag: 'e',
+			aStart: len(a) - s, aEnd: len(a), bStart: len(b) - s, bEnd: len(b)})
+	}
+	return ops, capped
+}
+
+// alignMiddle 은 공통 앞뒤를 걷어낸 가운데 구간을 정렬한다.
+// offA·offB 는 원래 목록에서의 시작 위치이며 반환 인덱스는 원래 기준이다.
+func alignMiddle(a, b []*node, offA, offB int) ([]op, bool) {
+	switch {
+	case len(a) == 0 && len(b) == 0:
+		return nil, false
+	case len(a) == 0:
+		return []op{{tag: 'i', aStart: offA, aEnd: offA, bStart: offB, bEnd: offB + len(b)}}, false
+	case len(b) == 0:
+		return []op{{tag: 'd', aStart: offA, aEnd: offA + len(a), bStart: offB, bEnd: offB}}, false
+	case len(a)*len(b) > maxCells:
+		// 상한 초과 — 위치 짝짓기용 r 구간 하나로 낸다. 호출자가 앞에서부터
+		// 짝지으므로 이 구간의 결과는 옛 위치 정렬과 같아진다.
+		return []op{{tag: 'r',
+			aStart: offA, aEnd: offA + len(a), bStart: offB, bEnd: offB + len(b)}}, true
+	}
+
+	// LCS 길이표. dp[i][j] = a[i:] 와 b[j:] 의 최장 공통 부분열 길이.
+	w := len(b) + 1
+	dp := make([]int32, (len(a)+1)*w)
+	for i := len(a) - 1; i >= 0; i-- {
+		for j := len(b) - 1; j >= 0; j-- {
+			switch {
+			case a[i].sig == b[j].sig:
+				dp[i*w+j] = dp[(i+1)*w+j+1] + 1
+			case dp[(i+1)*w+j] >= dp[i*w+j+1]:
+				dp[i*w+j] = dp[(i+1)*w+j]
+			default:
+				dp[i*w+j] = dp[i*w+j+1]
+			}
+		}
+	}
+
+	// 표를 되짚어 매칭 쌍을 모은다. 동점이면 a 를 먼저 버린다 —
+	// 어느 쪽을 고르든 길이는 같지만 **한쪽으로 고정해야 결정론적이다**(I3).
+	var matches [][2]int
+	for i, j := 0, 0; i < len(a) && j < len(b); {
+		switch {
+		case a[i].sig == b[j].sig:
+			matches = append(matches, [2]int{i, j})
+			i++
+			j++
+		case dp[(i+1)*w+j] >= dp[i*w+j+1]:
+			i++
+		default:
+			j++
+		}
+	}
+
+	ops := make([]op, 0, len(matches)*2+1)
+	pa, pb := 0, 0
+	gap := func(ai, bj int) {
+		switch {
+		case ai > pa && bj > pb:
+			ops = append(ops, op{tag: 'r',
+				aStart: offA + pa, aEnd: offA + ai, bStart: offB + pb, bEnd: offB + bj})
+		case ai > pa:
+			ops = append(ops, op{tag: 'd',
+				aStart: offA + pa, aEnd: offA + ai, bStart: offB + pb, bEnd: offB + pb})
+		case bj > pb:
+			ops = append(ops, op{tag: 'i',
+				aStart: offA + pa, aEnd: offA + pa, bStart: offB + pb, bEnd: offB + bj})
+		}
+	}
+	for _, m := range matches {
+		gap(m[0], m[1])
+		// 붙어 있는 equal 은 한 구간으로 합친다 — 노드마다 구간을 내면
+		// 호출자가 볼 것 없는 구간을 수천 개 받는다.
+		if k := len(ops) - 1; k >= 0 && ops[k].tag == 'e' &&
+			ops[k].aEnd == offA+m[0] && ops[k].bEnd == offB+m[1] {
+			ops[k].aEnd++
+			ops[k].bEnd++
+		} else {
+			ops = append(ops, op{tag: 'e',
+				aStart: offA + m[0], aEnd: offA + m[0] + 1,
+				bStart: offB + m[1], bEnd: offB + m[1] + 1})
+		}
+		pa, pb = m[0]+1, m[1]+1
+	}
+	gap(len(a), len(b))
+	return ops, false
+}

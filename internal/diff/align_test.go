@@ -2,6 +2,7 @@ package diff
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
@@ -116,5 +117,104 @@ func TestSignDistinguishesTextAndShape(t *testing.T) {
 	}
 	if mk("가", false).sig != mk("가", false).sig {
 		t.Fatal("같은 입력이 다른 해시를 냈다 — 결정론적이지 않다")
+	}
+}
+
+// mkSigs 는 주어진 해시 문자열들을 가진 형제 목록을 만든다.
+// 정렬은 sig 만 보므로 나머지 필드는 비워도 된다.
+func mkSigs(sigs ...string) []*node {
+	out := make([]*node, len(sigs))
+	for i, s := range sigs {
+		out[i] = &node{sig: s, size: 1}
+	}
+	return out
+}
+
+// opsString 은 구간 목록을 읽기 쉬운 한 줄로 만든다. 기대값과 대조하기 위한 것이다.
+func opsString(ops []op) string {
+	s := ""
+	for _, o := range ops {
+		if s != "" {
+			s += " "
+		}
+		s += string(o.tag) + "a" + itoa(o.aStart) + ":" + itoa(o.aEnd) +
+			"b" + itoa(o.bStart) + ":" + itoa(o.bEnd)
+	}
+	return s
+}
+
+func itoa(i int) string { return strconv.Itoa(i) }
+
+// TestAlignSiblings 는 정렬이 네 가지 모양을 정확히 가르는지 본다.
+func TestAlignSiblings(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b []string
+		want string
+	}{
+		{"완전히 같다", []string{"x", "y"}, []string{"x", "y"}, "ea0:2b0:2"},
+		{"가운데 삽입", []string{"x", "z"}, []string{"x", "y", "z"},
+			"ea0:1b0:1 ia1:1b1:2 ea1:2b2:3"},
+		{"가운데 삭제", []string{"x", "y", "z"}, []string{"x", "z"},
+			"ea0:1b0:1 da1:2b1:1 ea2:3b1:2"},
+		{"양쪽에 남는다", []string{"x", "y", "z"}, []string{"x", "w", "z"},
+			"ea0:1b0:1 ra1:2b1:2 ea2:3b2:3"},
+		{"기대만 비었다", nil, []string{"x"}, "ia0:0b0:1"},
+		{"실제만 비었다", []string{"x"}, nil, "da0:1b0:0"},
+		{"둘 다 비었다", nil, nil, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ops, capped := alignSiblings(mkSigs(c.a...), mkSigs(c.b...))
+			if capped {
+				t.Fatal("상한에 걸릴 입력이 아닌데 capped 다")
+			}
+			if got := opsString(ops); got != c.want {
+				t.Fatalf("정렬이 다르다\n  실제 %s\n  기대 %s", got, c.want)
+			}
+		})
+	}
+}
+
+// TestAlignSiblingsCommonPrefixSuffixIsFree 는 앞뒤 공통 구간을 잘라내는지 본다.
+// 잘라내지 않으면 상한에 쉽게 걸린다 — 실제 문서는 대부분 앞뒤가 같다.
+func TestAlignSiblingsCommonPrefixSuffixIsFree(t *testing.T) {
+	// 앞 2500개와 뒤 2500개가 같고 가운데만 다르다. 잘라내지 않으면
+	// 5001 × 5001 = 2500만 칸이라 상한(400만)을 넘는다.
+	var a, b []string
+	for i := 0; i < 2500; i++ {
+		a = append(a, "pre"+itoa(i))
+		b = append(b, "pre"+itoa(i))
+	}
+	a = append(a, "가운데-기대")
+	b = append(b, "가운데-실제")
+	for i := 0; i < 2500; i++ {
+		a = append(a, "post"+itoa(i))
+		b = append(b, "post"+itoa(i))
+	}
+	ops, capped := alignSiblings(mkSigs(a...), mkSigs(b...))
+	if capped {
+		t.Fatal("앞뒤 공통을 잘라냈으면 상한에 안 걸린다 — 잘라내지 않았다")
+	}
+	if got := opsString(ops); got != "ea0:2500b0:2500 ra2500:2501b2500:2501 ea2501:5001b2501:5001" {
+		t.Fatalf("정렬이 다르다: %s", got)
+	}
+}
+
+// TestAlignSiblingsCapFallsBackAndSaysSo 는 상한을 넘으면 위치 정렬로
+// 떨어지되 **그 사실을 알리는지** 본다. 조용히 떨어지면 거짓 성공이다.
+func TestAlignSiblingsCapFallsBackAndSaysSo(t *testing.T) {
+	const n = 2001 // 2001 × 2001 = 4,004,001 > 4,000,000
+	var a, b []string
+	for i := 0; i < n; i++ {
+		a = append(a, "A"+itoa(i))
+		b = append(b, "B"+itoa(i)) // 하나도 안 겹친다 — 앞뒤 잘라내기가 안 먹는다
+	}
+	ops, capped := alignSiblings(mkSigs(a...), mkSigs(b...))
+	if !capped {
+		t.Fatalf("%d × %d 는 상한(%d)을 넘는데 capped 가 아니다", n, n, maxCells)
+	}
+	if len(ops) != 1 || ops[0].tag != 'r' {
+		t.Fatalf("상한 초과는 위치 짝짓기용 r 구간 하나여야 한다: %s", opsString(ops))
 	}
 }
