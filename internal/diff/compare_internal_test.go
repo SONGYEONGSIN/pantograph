@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
@@ -144,5 +145,54 @@ func TestCompareTreesPreservesTrailingWhitespace(t *testing.T) {
 	}
 	if rep.Diffs[0].Actual == nil || *rep.Diffs[0].Actual != "값" {
 		t.Fatalf("actual=%v (기대 %q)", rep.Diffs[0].Actual, "값")
+	}
+}
+
+// TestCompareTreesDivergingPathStopsAtStructure 는 최종 리뷰 Important 지적을
+// 잠근다 — 설계 §4 의 핵심 분기("경로가 갈린다 — 이 파트는 여기서 중단")가
+// 커버리지 0이었다. 기존 TestPartMissingAndStructure(compare_test.go)는 이름과
+// 달리 **노드 수** 분기만 타고("노드 수가 다르다"), **경로**가 갈리는 분기는
+// 한 번도 실행되지 않았다.
+//
+// 두 트리를 인덱스 2에서 요소 타입 자체가 갈리게(p → tbl) 만든다 — 그래서
+// x.Path("document/p[2]") 와 y.Path("document/tbl[1]") 가 달라진다. 그 뒤
+// (인덱스 3)에 눈에 띄는 텍스트 차이를 심어 둔다: 갈린 지점에서 정말 멈췄다면
+// 이 텍스트 차이는 항목으로 나올 수 없다 — 나온다면 "이후 노드는 비교하지
+// 않았다"는 설계·Detail 문구가 거짓이라는 뜻이다.
+func TestCompareTreesDivergingPathStopsAtStructure(t *testing.T) {
+	a := &xmlscan.Tree{Nodes: []xmlscan.Node{
+		{Path: "document/p[1]", Type: "p"},
+		{Path: "document/p[1]/t[1]", Type: "t", Text: "첫문단"},
+		{Path: "document/p[2]", Type: "p"},                       // 여기서 갈린다
+		{Path: "document/p[2]/t[1]", Type: "t", Text: "둘째문단-기대"}, // 비교되면 안 된다
+	}}
+	b := &xmlscan.Tree{Nodes: []xmlscan.Node{
+		{Path: "document/p[1]", Type: "p"},
+		{Path: "document/p[1]/t[1]", Type: "t", Text: "첫문단"},
+		{Path: "document/tbl[1]", Type: "tbl"}, // p 대신 tbl — 경로 자체가 다르다
+		{Path: "document/tbl[1]/t[1]", Type: "t", Text: "둘째문단-실제"},
+	}}
+
+	rep := &Report{}
+	compareTrees(rep, "body", "test.xml", a, b)
+
+	if len(rep.Diffs) != 1 {
+		t.Fatalf("structure 항목이 정확히 1개여야 하는데 %d개다 (뒤 텍스트 차이가 새어나왔다면 2개가 된다): %+v",
+			len(rep.Diffs), rep.Diffs)
+	}
+	d := rep.Diffs[0]
+	if d.Kind != "structure" {
+		t.Fatalf("kind=%q (기대 structure)", d.Kind)
+	}
+	if !strings.Contains(d.Detail, "경로가 갈린다") || !strings.Contains(d.Detail, "비교하지 않았다") {
+		t.Fatalf("detail 이 두 문구를 다 담지 않는다: %q", d.Detail)
+	}
+	// 갈린 지점 이후(인덱스 3, "둘째문단-기대" vs "둘째문단-실제")는 비교되지
+	// 않아야 한다 — 항목이 1개뿐이라는 위 검사가 이미 이를 함의하지만,
+	// text kind 가 하나도 없다는 것을 명시적으로 다시 확인한다.
+	for _, dd := range rep.Diffs {
+		if dd.Kind == "text" {
+			t.Fatalf("갈린 지점 이후 노드가 비교됐다: %+v", dd)
+		}
 	}
 }
