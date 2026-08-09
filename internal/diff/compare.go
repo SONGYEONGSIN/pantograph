@@ -215,7 +215,7 @@ func lastPath(a, b *xmlscan.Tree, n int) string {
 func compareAttrs(rep *Report, scope, part string, x, y xmlscan.Node) {
 	xa := attrMap(x)
 	ya := attrMap(y)
-	names := make([]string, 0, len(xa)+len(ya))
+	names := make([][2]string, 0, len(xa)+len(ya))
 	for k := range xa {
 		names = append(names, k)
 	}
@@ -224,7 +224,15 @@ func compareAttrs(rep *Report, scope, part string, x, y xmlscan.Node) {
 			names = append(names, k)
 		}
 	}
-	sort.Strings(names) // 맵 순회 순서가 새면 출력이 비결정적이 된다 (I3)
+	// 로컬명 우선, 같으면 NS 차순 — 결정성(I3)과 함께, 항목이 사람이 보기
+	// 자연스러운 로컬명 순서로 나오게 한다. 맵 순회 순서가 새면 출력이
+	// 비결정적이 된다.
+	sort.Slice(names, func(i, j int) bool {
+		if names[i][1] != names[j][1] {
+			return names[i][1] < names[j][1]
+		}
+		return names[i][0] < names[j][0]
+	})
 
 	for _, k := range names {
 		xv, xok := xa[k]
@@ -232,7 +240,10 @@ func compareAttrs(rep *Report, scope, part string, x, y xmlscan.Node) {
 		if xok && yok && xv == yv {
 			continue
 		}
-		d := Diff{Kind: "attr", Scope: scope, Part: part, Path: x.Path, Attr: k}
+		// Attr 필드에는 로컬명만 싣는다(k[1]) — 소비자는 "id" 를 보고 싶지
+		// "{http://…}id" 를 보고 싶은 게 아니다. 어느 네임스페이스의 id 인지는
+		// path 와 part 가 이미 좁혀준다.
+		d := Diff{Kind: "attr", Scope: scope, Part: part, Path: x.Path, Attr: k[1]}
 		if xok {
 			d.Expected = ptr(xv)
 		}
@@ -243,14 +254,27 @@ func compareAttrs(rep *Report, scope, part string, x, y xmlscan.Node) {
 	}
 }
 
-// attrMap 은 휘발성과 네임스페이스 선언을 뺀 속성을 로컬명으로 색인한다.
-func attrMap(n xmlscan.Node) map[string]string {
-	m := make(map[string]string)
+// attrMap 은 휘발성과 네임스페이스 선언을 뺀 속성을 (네임스페이스, 로컬명)
+// 짝으로 색인한다.
+//
+// 로컬명만으로 색인하면 안 되는 이유: <p:sldId id="256" r:id="rId2"/> 는
+// xmlscan.Attr 두 개를 낳는데, 접두사를 버리는 xmlscan 설계(scan.go 주석 —
+// "접두사는 문서마다 다를 수 있어 보존하지 않는다") 때문에 **둘 다
+// Name=="id"** 다 — 하나는 슬라이드 정체성(네임스페이스 없음), 하나는
+// relationships 네임스페이스의 관계 참조다. 로컬명 키 맵에 넣으면 원문 순서상
+// 뒤에 오는 쪽이 앞을 덮어써 슬라이드 정체성 id 가 비교에서 통째로 빠지고,
+// 그런데도 diff 는 "차이 없음"을 낸다(최종 리뷰 Critical).
+//
+// NS 를 키에 넣어도 compareAttrs 가 소비자에게 보여주는 Attr 필드에는 로컬명만
+// 싣는다(k[1]) — 어느 네임스페이스인지는 사람이 몰라도 되고, path·part 가
+// 이미 위치를 좁혀준다.
+func attrMap(n xmlscan.Node) map[[2]string]string {
+	m := make(map[[2]string]string)
 	for _, a := range parts.StableAttrs(n) {
 		if a.NS == "xmlns" {
 			continue
 		}
-		m[a.Name] = a.Value
+		m[[2]string{a.NS, a.Name}] = a.Value
 	}
 	return m
 }

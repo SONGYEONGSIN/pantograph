@@ -66,6 +66,56 @@ func TestCompareAttrsIgnoresNamespaceDeclarations(t *testing.T) {
 	}
 }
 
+// TestAttrMapKeepsNamespaceCollidingLocalNames 는 최종 리뷰 Critical 지적을
+// 잠근다 — attrMap 이 로컬명만으로 색인해 <p:sldId id="256" r:id="rId2"/> 같은
+// 마크업에서 속성이 조용히 사라지는 문제.
+//
+// xmlscan.Attr 은 로컬명만 Name 에 담고 접두사는 버린다(scan.go 주석). 그래서
+// "id"(네임스페이스 없음, 슬라이드 정체성)와 "r:id"(relationships 네임스페이스,
+// 관계 참조)가 스캔 후에는 둘 다 Name=="id"로 남는다. attrMap 이 로컬명만으로
+// 맵을 채우면 원문 순서상 뒤에 오는 것이 앞을 덮어써 슬라이드 정체성 id가
+// 통째로 비교에서 빠진다 — 그런데도 diff 는 "차이 없음"을 낸다.
+//
+// 수정 전(로컬명 키)에는 이 테스트가 0개 항목을 낸다: 두 Attrs 슬라이스 모두
+// map[string]string{"id": "rId2"}로 좁혀지고(원문 순서상 r:id 가 나중이라 그
+// 값이 남는다), 두 문서의 r:id 값이 같으므로 차이가 안 보인다.
+func TestAttrMapKeepsNamespaceCollidingLocalNames(t *testing.T) {
+	const relNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+	x := xmlscan.Node{
+		Path: "presentation/sldIdLst[1]/sldId[1]",
+		Type: "sldId",
+		Attrs: []xmlscan.Attr{
+			{Name: "id", Value: "256"},             // 슬라이드 정체성 (네임스페이스 없음)
+			{Name: "id", NS: relNS, Value: "rId2"}, // r:id — 관계 참조. 값은 두 쪽이 같다
+		},
+	}
+	y := xmlscan.Node{
+		Path: "presentation/sldIdLst[1]/sldId[1]",
+		Type: "sldId",
+		Attrs: []xmlscan.Attr{
+			{Name: "id", Value: "999"},             // 값이 256→999로 바뀐 슬라이드 정체성
+			{Name: "id", NS: relNS, Value: "rId2"}, // r:id 는 그대로
+		},
+	}
+
+	rep := &Report{}
+	compareAttrs(rep, "body", "ppt/presentation.xml", x, y)
+	if len(rep.Diffs) != 1 {
+		t.Fatalf("id 속성 값이 256→999로 바뀌었는데 %d개 항목이 나왔다 (기대 1개): %+v", len(rep.Diffs), rep.Diffs)
+	}
+	d := rep.Diffs[0]
+	if d.Kind != "attr" || d.Attr != "id" {
+		t.Fatalf("잘못된 항목: %+v", d)
+	}
+	if d.Expected == nil || *d.Expected != "256" {
+		t.Fatalf("expected=%v (기대 %q)", d.Expected, "256")
+	}
+	if d.Actual == nil || *d.Actual != "999" {
+		t.Fatalf("actual=%v (기대 %q)", d.Actual, "999")
+	}
+}
+
 // TestCompareTreesPreservesTrailingWhitespace 는 설계 §6/브리프의 "텍스트
 // 공백을 다듬지 않는다 — xml:space=\"preserve\" 인 w:t 의 끝 공백은 내용이다"
 // 규칙을 잠근다.
