@@ -201,6 +201,29 @@ func TestAlignSiblingsCommonPrefixSuffixIsFree(t *testing.T) {
 	}
 }
 
+// TestAlignSiblingsMidListPureInsertion 은 alignMiddle 안에서 LCS 매칭 사이의
+// 순수 삽입(gap() 의 case bj > pb: 분기)이 항목을 내는지 본다.
+//
+// 이전까지 이 분기는 커버리지 0이었다 — TestAlignSiblings 의 "가운데 삽입"
+// 사례([x,z] vs [x,y,z])는 앞뒤 공통을 걷어내면 가운데가 len(a)==0 이 되어
+// alignMiddle 의 조기 반환(case len(a) == 0)으로 빠진다. gap() 의 LCS 매칭
+// 루프 안 순수 삽입 분기는 그 경로로는 한 번도 실행되지 않는다.
+//
+// 이 사례는 앞뒤 어디도 통째로 못 잘라내게 만든다: a=[P,Q] 대 b=[P,N,Q,R].
+// P 가 앞 공통(p=1)으로 잘리고 나면 가운데는 a=[Q] 대 b=[N,Q,R] — 양쪽 다
+// 비지 않은 채로 alignMiddle 의 LCS 갈래로 들어가, Q 매칭 앞뒤로 gap() 이
+// 두 번(N 앞에서 한 번, R 뒤에서 한 번) 순수 삽입 분기를 탄다.
+func TestAlignSiblingsMidListPureInsertion(t *testing.T) {
+	ops, capped := alignSiblings(mkSigs("P", "Q"), mkSigs("P", "N", "Q", "R"))
+	if capped {
+		t.Fatal("상한에 걸릴 입력이 아닌데 capped 다")
+	}
+	want := "ea0:1b0:1 ia1:1b1:2 ea1:2b2:3 ia2:2b3:4"
+	if got := opsString(ops); got != want {
+		t.Fatalf("정렬이 다르다\n  실제 %s\n  기대 %s", got, want)
+	}
+}
+
 // TestAlignSiblingsCapFallsBackAndSaysSo 는 상한을 넘으면 위치 정렬로
 // 떨어지되 **그 사실을 알리는지** 본다. 조용히 떨어지면 거짓 성공이다.
 func TestAlignSiblingsCapFallsBackAndSaysSo(t *testing.T) {

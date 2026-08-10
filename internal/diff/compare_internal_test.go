@@ -211,6 +211,11 @@ func TestCompareTreesAlignsAcrossDeletionAndFindsDownstreamText(t *testing.T) {
 	if del == nil || del.Path != "document/p[2]" {
 		t.Fatalf("deleted 항목이 없거나 경로가 다르다: %+v", rep.Diffs)
 	}
+	// subtreeDiff 의 방향 문구("기대"/"실제")가 뒤바뀌어도 위 어떤 단언도
+	// 못 잡는다 — detail 내용까지 확인해 그 방향을 잠근다.
+	if !strings.Contains(del.Detail, "기대") {
+		t.Fatalf("deleted 항목의 detail 이 '기대' 를 안 담는다: %q", del.Detail)
+	}
 
 	if rep.Summary.Text != 1 {
 		t.Fatalf("text=%d (기대 1 — 갈린 지점 뒤 '바뀐값' 문단의 텍스트 차이): %+v",
@@ -234,6 +239,79 @@ func TestCompareTreesAlignsAcrossDeletionAndFindsDownstreamText(t *testing.T) {
 	if len(rep.Diffs) != 2 {
 		t.Fatalf("항목이 %d개다 (기대 2 — deleted 1 + text 1): %+v", len(rep.Diffs), rep.Diffs)
 	}
+}
+
+// TestAlignChildrenAsymmetricReplaceTail 은 'r' 구간이 앵커 없이 위치로
+// 짝지어지고 양쪽 길이가 다를 때 남는 꼬리(deleted 또는 inserted)를 커버한다.
+//
+// 이전에는 la != lb 인 'r' 구간을 타는 테스트가 하나도 없었다 —
+// TestCompareTreesAlignsAcrossDeletionAndFindsDownstreamText 의 'r' 구간은
+// 항상 1대1(la==lb==1)이라 꼬리 루프가 실행되지 않는다. 그래서
+// min(la,lb) 를 la 로 바꾸는 변이(꼬리 시작점 계산이 틀렸는데도 안 걸린다)가
+// 인덱스 초과 패닉을 내는데도 CI 를 통과했다(보고서 참고).
+//
+// 두 트리 모두 공통 앞머리(Anchor)로 시작해 alignSiblings 의 공통 접두사
+// 잘라내기를 통과시키고, 그 뒤 요소들은 서로 sig 가 겹치지 않게(모두 다른
+// 텍스트) 만들어 LCS 매칭이 하나도 안 생기게 한다 — 그러면
+// gap(len(a), len(b)) 가 직접 앵커 없는 'r' 구간 하나를 낸다
+// (ai>pa && bj>pb).
+func TestAlignChildrenAsymmetricReplaceTail(t *testing.T) {
+	anchor := xmlscan.Node{Path: "document/p[1]", Type: "p", Text: "고정",
+		Span: xmlscan.Span{Start: 1, End: 10}}
+	root := func() xmlscan.Node {
+		return xmlscan.Node{Path: "document", Type: "document", Span: xmlscan.Span{Start: 0, End: 200}}
+	}
+	para := func(idx int, text string) xmlscan.Node {
+		start := 1 + idx*10
+		return xmlscan.Node{Path: fmt.Sprintf("document/p[%d]", idx+1), Type: "p", Text: text,
+			Span: xmlscan.Span{Start: start, End: start + 9}}
+	}
+
+	t.Run("기대3_실제1", func(t *testing.T) {
+		a := &xmlscan.Tree{Nodes: []xmlscan.Node{root(), anchor,
+			para(1, "차이있음-기대"), para(2, "지워질2"), para(3, "지워질3")}}
+		b := &xmlscan.Tree{Nodes: []xmlscan.Node{root(), anchor,
+			para(1, "차이있음-실제")}}
+
+		rep := &Report{}
+		compareTrees(rep, "body", "test.xml", a, b)
+
+		if rep.Summary.Deleted != 2 {
+			t.Fatalf("deleted=%d (기대 2 — 짝 없는 기대 꼬리 p[3]·p[4]): %+v", rep.Summary.Deleted, rep.Diffs)
+		}
+		if rep.Summary.Inserted != 0 {
+			t.Fatalf("inserted=%d (기대 0): %+v", rep.Summary.Inserted, rep.Diffs)
+		}
+		if rep.Summary.Structure != 1 {
+			t.Fatalf("structure=%d (기대 1 — la=3 lb=1, 앵커 없이 위치로 짝지었다): %+v", rep.Summary.Structure, rep.Diffs)
+		}
+		if rep.Summary.Text != 1 {
+			t.Fatalf("text=%d (기대 1 — 짝지어진 p[2] 쌍의 텍스트 차이): %+v", rep.Summary.Text, rep.Diffs)
+		}
+	})
+
+	t.Run("기대1_실제3", func(t *testing.T) {
+		a := &xmlscan.Tree{Nodes: []xmlscan.Node{root(), anchor,
+			para(1, "기대만있음")}}
+		b := &xmlscan.Tree{Nodes: []xmlscan.Node{root(), anchor,
+			para(1, "실제전용1"), para(2, "실제전용2"), para(3, "실제전용3")}}
+
+		rep := &Report{}
+		compareTrees(rep, "body", "test.xml", a, b)
+
+		if rep.Summary.Inserted != 2 {
+			t.Fatalf("inserted=%d (기대 2 — 짝 없는 실제 꼬리 p[3]·p[4]): %+v", rep.Summary.Inserted, rep.Diffs)
+		}
+		if rep.Summary.Deleted != 0 {
+			t.Fatalf("deleted=%d (기대 0): %+v", rep.Summary.Deleted, rep.Diffs)
+		}
+		if rep.Summary.Structure != 1 {
+			t.Fatalf("structure=%d (기대 1 — la=1 lb=3, 앵커 없이 위치로 짝지었다): %+v", rep.Summary.Structure, rep.Diffs)
+		}
+		if rep.Summary.Text != 1 {
+			t.Fatalf("text=%d (기대 1 — 짝지어진 p[2] 쌍의 텍스트 차이): %+v", rep.Summary.Text, rep.Diffs)
+		}
+	})
 }
 
 // TestCapExceededProducesStructureNotSilentPositionalFallback 은 최종 리뷰
