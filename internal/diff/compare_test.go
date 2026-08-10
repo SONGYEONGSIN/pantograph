@@ -3,7 +3,6 @@ package diff_test
 import (
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/diff"
@@ -132,7 +131,12 @@ func TestD2FullCounts(t *testing.T) {
 			Text: 5, Attr: 2, Elem: 0, Structure: 0,
 			PartContent: 0, PartMissing: 0, Total: 7, VolatileOnly: 1}},
 		{"deck-a.pptx", "deck-b.pptx", diff.Summary{
-			Text: 11, Attr: 0, Elem: 0, Structure: 1,
+			// ppt/presentation.xml 의 자식이 deck-a 는
+			// [sldMasterIdLst, sldIdLst, sldSz, notesSz, defaultTextStyle, extLst],
+			// deck-b 는 extLst 가 없다 — extLst 는 최상위 자식이라 정렬이
+			// 정확히 deleted 1건을 낸다. 종류만 structure→deleted 로
+			// 바뀌었을 뿐 Total 은 13 그대로다.
+			Text: 11, Attr: 0, Elem: 0, Structure: 0, Deleted: 1,
 			PartContent: 1, PartMissing: 0, Total: 13, VolatileOnly: 12}},
 	}
 	for _, c := range cases {
@@ -216,9 +220,14 @@ func TestSelectorSkipsNonPlanParts(t *testing.T) {
 	}
 }
 
-// TestPartMissingAndStructure 는 실제 픽스처에 없는 두 경로를 합성 컨테이너로
-// 실행한다 — 파트 수가 다른 경우와 노드 수가 다른 경우.
-func TestPartMissingAndStructure(t *testing.T) {
+// TestPartMissingAndInsertion 은 실제 픽스처에 없는 문단 수가 다른 경우를
+// 합성 컨테이너로 실행한다. part_missing 은 만들지 않는다 — 파트 수가 다른
+// 경우는 TestPartMissingThreeSitesAndScanAnyFallback 이 다룬다.
+//
+// LCS 정렬 이전에는 "두 줄"이 끝에 추가되면 "노드 수가 다르다" structure
+// 항목이 났다. 지금은 정렬이 "한 줄"을 공통 접두사로 매칭하고 남은 "두 줄"
+// 문단 하나를 inserted 서브트리로 정확히 잡는다.
+func TestPartMissingAndInsertion(t *testing.T) {
 	a := testutil.MinimalDocx([]string{"한 줄"})
 	b := testutil.MinimalDocx([]string{"한 줄", "두 줄"})
 	pa, err := opc.OpenBytes(a)
@@ -241,21 +250,21 @@ func TestPartMissingAndStructure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
-	if rep.Summary.Structure != 1 {
-		t.Fatalf("structure=%d (기대 1 — 문단 수가 다르다): %+v", rep.Summary.Structure, rep.Diffs)
+	if rep.Summary.Inserted != 1 {
+		t.Fatalf("inserted=%d (기대 1 — '두 줄' 문단이 끝에 추가됐다): %+v", rep.Summary.Inserted, rep.Diffs)
 	}
-	var st *diff.Diff
+	if rep.Summary.Structure != 0 {
+		t.Fatalf("structure=%d (기대 0 — 정렬이 '두 줄'을 정확히 삽입으로 잡는다): %+v",
+			rep.Summary.Structure, rep.Diffs)
+	}
+	var ins *diff.Diff
 	for i := range rep.Diffs {
-		if rep.Diffs[i].Kind == "structure" {
-			st = &rep.Diffs[i]
+		if rep.Diffs[i].Kind == "inserted" {
+			ins = &rep.Diffs[i]
 		}
 	}
-	// 이 합성 쌍은 "경로가 갈린다"(중간 삽입)가 아니라 "노드 수가 다르다"
-	// (끝에 문단 추가) 경로를 탄다 — 공통 접두사의 경로·타입·텍스트가 전부
-	// 같아서 루프가 끝까지 돌고, 그 다음 길이 비교에서만 갈린다. 위 주석의
-	// "part_missing 은 이 합성 쌍으로도 안 난다"는 설명도 같은 사실을 전제한다.
-	if st == nil || !strings.Contains(st.Detail, "노드 수가 다르다") {
-		t.Fatalf("structure 항목이 '노드 수가 다르다'를 말하지 않는다: %+v", st)
+	if ins == nil || ins.Path != "document/body[1]/p[2]" {
+		t.Fatalf("inserted 항목이 없거나 경로가 다르다: %+v", rep.Diffs)
 	}
 }
 
@@ -298,8 +307,9 @@ func miniPptx(t *testing.T, contentTypesXML, sldIdsXML, relsXML string, entries 
 
 // TestPartMissingThreeSitesAndScanAnyFallback 은 최종 리뷰 Important 지적을
 // 잠근다 — treeOf 의 ScanAny 폴백 분기와 part_missing 을 만드는 세 지점이
-// 전부 커버리지 0이었다(기존 TestPartMissingAndStructure 는 이름과 달리
-// part_missing 을 하나도 만들지 않는다 — 그 테스트 자신의 주석이 인정한다).
+// 전부 커버리지 0이었다(TestPartMissingAndInsertion(개명 전 이름
+// TestPartMissingAndStructure)은 이름과 달리 part_missing 을 하나도 만들지
+// 않는다 — 문단 수가 다른 경우만 다룬다).
 //
 // 합성 컨테이너 하나로 넷을 동시에 건다:
 //
@@ -351,16 +361,19 @@ func TestPartMissingThreeSitesAndScanAnyFallback(t *testing.T) {
 	}
 
 	// 실측(관찰 후 단언): part_missing 3(위 넷 중 1·2·3) + text 1(slide3, 폴백
-	// 경유) + structure 1. structure 1은 이 컨테이너가 만드는 다섯 번째
-	// 항목이다 — ppt/presentation.xml 도 계획 밖 파트라 compareOtherParts 를
-	// 지나는데, expected 의 sldIdLst 는 sldId 5개 노드(루트 1 + sldIdLst 1 +
-	// sldId 3), actual 은 3개 노드(루트 1 + sldIdLst 1 + sldId 1)라 바이트가
-	// 달라 스캔되고, 공통 접두사(루트·sldIdLst·sldId[1])까지는 같아 노드 수
-	// 차이로만 갈린다. [Content_Types].xml 과 rels 는 두 문서가 같은 문자열을
-	// 공유해 바이트 동일 — 1단에서 걸러져 항목이 안 남는다.
+	// 경유) + deleted 2. ppt/presentation.xml 도 계획 밖 파트라 compareOtherParts
+	// 를 지나는데, expected 의 sldIdLst 는 sldId 3개(id=1,2,3), actual 은 1개
+	// (id=1)다. 정렬은 sldId[1]을 앞 공통으로 매칭하고 남은 sldId[2]·sldId[3]을
+	// alignMiddle 의 'd' 구간(위치로는 하나로 뭉친 구간)에 담는데, 그 구간을
+	// 서브트리 단위로 펼치는 루프(compare.go alignChildren 의 'd' 분기)가 구간
+	// 안 서브트리 개수만큼 항목을 낸다 — sldId 는 형제이지 하나의 서브트리가
+	// 아니므로 2건이다. LCS 이전에는 이 차이가 "노드 수가 다르다" structure
+	// 하나로 뭉뚱그려졌지만 지금은 무엇이 없어졌는지(sldId 2개)를 정확히 말해
+	// Total 이 5에서 6으로 는다. [Content_Types].xml 과 rels 는 두 문서가 같은
+	// 문자열을 공유해 바이트 동일 — 1단에서 걸러져 항목이 안 남는다.
 	want := diff.Summary{
-		Text: 1, Attr: 0, Elem: 0, Structure: 1,
-		PartContent: 0, PartMissing: 3, Total: 5, VolatileOnly: 0,
+		Text: 1, Attr: 0, Elem: 0, Structure: 0, Deleted: 2,
+		PartContent: 0, PartMissing: 3, Total: 6, VolatileOnly: 0,
 	}
 	if rep.Summary != want {
 		t.Fatalf("요약이 다르다\n  실제 %+v\n  기대 %+v\n  항목: %+v", rep.Summary, want, rep.Diffs)
@@ -468,5 +481,62 @@ func TestD3LocalityOfPatchedDocument(t *testing.T) {
 	}
 	if d.Actual == nil || *d.Actual != "바뀐 제목" {
 		t.Fatalf("actual=%v (기대 %q)", d.Actual, "바뀐 제목")
+	}
+}
+
+// TestL1InsertionHonesty 는 문단 하나를 삽입했을 때 **거짓 text 항목이 없는지**
+// 본다. 이 슬라이스의 존재 이유다.
+//
+// 위치 정렬은 삽입 뒤의 모든 노드를 서로 다른 것과 짝지어서, 문단 하나를
+// 끼워 넣었을 뿐인데 "셋째 줄 → 새로 낀 줄" 이라는 text 항목을 냈다. 아무도
+// 그 텍스트를 바꾸지 않았다 — 그 출력을 믿는 에이전트는 정확히 틀린 패치를 쓴다.
+func TestL1InsertionHonesty(t *testing.T) {
+	two := testutil.MinimalDocx([]string{"첫 줄", "셋째 줄"})
+	three := testutil.MinimalDocx([]string{"첫 줄", "새로 낀 줄", "셋째 줄"})
+	pa, err := opc.OpenBytes(two)
+	if err != nil {
+		t.Fatalf("OpenBytes two: %v", err)
+	}
+	pb, err := opc.OpenBytes(three)
+	if err != nil {
+		t.Fatalf("OpenBytes three: %v", err)
+	}
+	da, err := parts.Open(pa)
+	if err != nil {
+		t.Fatalf("parts.Open two: %v", err)
+	}
+	db, err := parts.Open(pb)
+	if err != nil {
+		t.Fatalf("parts.Open three: %v", err)
+	}
+	rep, err := diff.Compare(da, db, "two.docx", "three.docx", nil)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if rep.Summary.Text != 0 {
+		t.Fatalf("삽입인데 text 항목이 %d개다 — 거짓말이다: %+v", rep.Summary.Text, rep.Diffs)
+	}
+	if rep.Summary.Inserted != 1 {
+		t.Fatalf("inserted=%d (기대 1 — 문단 하나가 서브트리 하나다): %+v",
+			rep.Summary.Inserted, rep.Diffs)
+	}
+	if rep.Summary.Structure != 0 {
+		t.Fatalf("정렬이 됐는데 structure 가 %d개다: %+v", rep.Summary.Structure, rep.Diffs)
+	}
+	var ins *diff.Diff
+	for i := range rep.Diffs {
+		if rep.Diffs[i].Kind == "inserted" {
+			ins = &rep.Diffs[i]
+		}
+	}
+	if ins == nil {
+		t.Fatal("inserted 항목이 없다")
+	}
+	// 경로는 **실제 기준**이다 — 삽입된 문단은 실제 문서의 p[2] 다.
+	if ins.Path != "document/body[1]/p[2]" {
+		t.Fatalf("inserted 경로가 %q (기대 %q)", ins.Path, "document/body[1]/p[2]")
+	}
+	if ins.Detail == "" {
+		t.Fatal("detail 이 비었다 — 서브트리가 몇 노드인지 말해야 한다")
 	}
 }

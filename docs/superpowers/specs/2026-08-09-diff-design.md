@@ -42,6 +42,8 @@ panto diff <expected> <actual> [--part <선택자>]
 
 ## 4. 구조가 다를 때 — 위치 정렬, 갈리면 그 파트만 중단
 
+> **이 절은 [LCS 정렬 설계](2026-08-10-lcs-align-design.md)가 대체했다.** 아래는 그 이전의 결정이며, "갈리면 그 파트만 중단" 은 더 이상 구현의 동작이 아니다. 기록으로 남긴다.
+
 `tmpl.Extract` 는 노드 수가 다르면 즉시 문서 전체를 거절한다. diff 는 그럴 수 없다 — 보정 루프에서는 **재현물이 문단을 하나 더 갖거나 덜 갖는 것이 정상 상황**이고, 거절하면 가장 필요한 순간에 못 쓴다.
 
 그래서 위치 정렬(index 대 index)로 비교하되, 경로가 갈리는 지점에서 `structure` 항목 **하나**를 내고 **그 파트만** 멈춘다. 다른 파트는 계속 본다.
@@ -79,12 +81,16 @@ LCS 정렬(삽입·삭제·변경 구분)은 하지 않는다 — README 「다�
 
 ## 6. 차이 어휘
 
+**`structure` 의 뜻은 [LCS 정렬 설계](2026-08-10-lcs-align-design.md) §4 이후 좁아졌고, `inserted`·`deleted` 두 kind 가 새로 생겼다.** 아래 표는 그 이후 값이다.
+
 | kind | 뜻 | 항목이 싣는 것 |
 |---|---|---|
 | `text` | 요소가 **직접** 품은 텍스트가 다르다 (`w:t`·`a:t` 만이 아니다 — `<Words>17</Words>` 도 여기 걸린다) | scope, part, path, expected, actual |
 | `attr` | 속성 값이 다르다 / 한쪽에만 있다 | scope, part, path, attr, expected, actual |
 | `elem` | 같은 위치의 요소 타입이 다르다 | scope, part, path, expected, actual |
-| `structure` | 경로 순열이 갈렸다 — 이 파트는 여기서 중단 | scope, part, path, detail |
+| `inserted` | 실제에만 있는 서브트리 | scope, part, path(**실제 기준**), detail(노드 수) |
+| `deleted` | 기대에만 있는 서브트리 | scope, part, path(**기대 기준**), detail(노드 수) |
+| `structure` | **정렬을 포기하고 위치로 비교했다** — 세 조건 중 하나: (1) 형제가 상한을 넘을 때, (2) 한쪽 파트가 노드 0개로 스캔될 때, (3) `'r'` 구간에 매칭 앵커가 없는데 양쪽 길이까지 다를 때(같은 설계 §9). 정본은 `internal/diff/report.go` 의 `Summary.Structure` 주석이다. 실제 문서에서는 사실상 나오지 않는다 | scope, part, path, detail |
 | `part_content` | 스캔할 수 없는 파트의 내용이 다르다 | part, detail |
 | `part_missing` | 한쪽에만 있는 파트 | part, detail |
 
@@ -103,7 +109,8 @@ LCS 정렬(삽입·삭제·변경 구분)은 하지 않는다 — README 「다�
   "expected": "deck-a.pptx",
   "actual": "deck-b.pptx",
   "summary": {
-    "text": 11, "attr": 0, "elem": 0, "structure": 1,
+    "text": 11, "attr": 0, "elem": 0, "structure": 0,
+    "inserted": 0, "deleted": 1,
     "part_content": 1, "part_missing": 0,
     "total": 13, "volatile_only": 12
   },
@@ -115,6 +122,12 @@ LCS 정렬(삽입·삭제·변경 구분)은 하지 않는다 — README 「다�
       "expected": "표지", "actual": "겉표지"
     },
     {
+      "kind": "deleted", "scope": "other",
+      "part": "ppt/presentation.xml",
+      "path": "presentation/extLst[1]",
+      "detail": "기대 에만 있는 서브트리 — 노드 3개"
+    },
+    {
       "kind": "part_content",
       "part": "docProps/thumbnail.jpeg",
       "detail": "스캔할 수 없어 내용만 비교했다 — 다르다 (길이 1741 B vs 1938 B)"
@@ -123,7 +136,9 @@ LCS 정렬(삽입·삭제·변경 구분)은 하지 않는다 — README 「다�
 }
 ```
 
-`diffs` 는 발췌다. `summary` 는 이 두 픽스처의 전체 결과이며, `text` 11 은 본문 슬라이드 3 + `docProps/app.xml` 5 + `docProps/core.xml` 3 이다 (§10 의 표).
+(`/tmp/panto diff testdata/real/deck-a.pptx testdata/real/deck-b.pptx` 실측 — `go build -o /tmp/panto ./cmd/panto` 로 빌드한 바이너리의 실제 출력이다.)
+
+`diffs` 는 발췌다(실제 전체는 13건 — `text` 11 · `deleted` 1 · `part_content` 1). `summary` 는 이 두 픽스처의 전체 결과이며, `text` 11 은 본문 슬라이드 3 + `docProps/app.xml` 5 + `docProps/core.xml` 3 이다 (§10 의 표). `deleted` 1 은 `ppt/presentation.xml` 의 `extLst`(안내선) — deck-a 에만 있다.
 
 `volatile_only` 는 **바이트는 다른데 항목이 하나도 안 나온 계획 밖 파트의 수**다. 이 값이 없으면 사용자가 `unzip`+`diff` 로 본 것과 `panto diff` 의 답이 어긋나 보이고, 그 침묵을 설명할 방법이 없다. 12 라고 말해주면 "우리가 알고 무시했다"가 된다.
 
@@ -218,10 +233,12 @@ func Compare(expected, actual *parts.Document, sels []string) (*Report, error)
 
 그 비교기는 `docs/superpowers/specs/oracle/diff-count.py` 에 있다(저장소 루트에서 `python3 docs/superpowers/specs/oracle/diff-count.py`로 재현). **한계**: 파이썬 `xml.etree` 는 네임스페이스 선언·속성의 네임스페이스를 xmlscan 과 다르게 다뤄, 이 오라클은 속성을 로컬명만으로 비교한다 — 그래서 최종 리뷰가 찾은 attrMap 의 네임스페이스 충돌 결함을 이 오라클도 똑같이 못 잡는다(픽스처의 `sldId`/`sldLayoutId` 값이 두 파일에서 같아 우연히 드러나지 않았을 뿐이다). 스크립트 머리말에 이 한계와 `.text`/`.tail` 모델 차이를 더 자세히 적어 뒀다.
 
-| | `text` | `attr` | `elem` | `structure` | `part_content` | `total` | `volatile_only` |
-|---|---|---|---|---|---|---|---|
-| form-a vs form-b | 5 | 2 | 0 | 0 | 0 | 7 | 1 |
-| deck-a vs deck-b | 11 | 0 | 0 | 1 | 1 | 13 | 12 |
+**아래 수치는 [LCS 정렬 설계](2026-08-10-lcs-align-design.md) 이후 값이다.** 그 이전(위치 정렬) 값은 deck 행 기준 `structure 1`·`deleted 0` 이었다 — 총량(`total`·`volatile_only`)은 안 바뀌고 deck 의 `ppt/presentation.xml` 차이 1건이 `structure` 에서 `deleted` 로 종류만 바뀐다(LCS 설계 §7 의 예측대로다).
+
+| | `text` | `attr` | `elem` | `structure` | `inserted` | `deleted` | `part_content` | `total` | `volatile_only` |
+|---|---|---|---|---|---|---|---|---|---|
+| form-a vs form-b | 5 | 2 | 0 | 0 | 0 | 0 | 0 | 7 | 1 |
+| deck-a vs deck-b | 11 | 0 | 0 | 0 | 0 | 1 | 1 | 13 | 12 |
 
 내역:
 
@@ -234,7 +251,7 @@ func Compare(expected, actual *parts.Document, sels []string) (*Report, error)
 | deck | `ppt/slides/slide1~3.xml` | body | `text` 각 1 |
 | | `docProps/app.xml` | other | `text` 5 |
 | | `docProps/core.xml` | other | `text` 3 (수정자·개정·시각) |
-| | `ppt/presentation.xml` | other | `structure` 1 (안내선 `p:extLst` 유무) |
+| | `ppt/presentation.xml` | other | `deleted` 1 (안내선 `p:extLst` — deck-a 에만 있다) |
 | | `docProps/thumbnail.jpeg` | other | `part_content` 1 (스캔 불가) |
 | | 레이아웃 11 + 마스터 1 | other | 없음 → `volatile_only` 12 |
 
@@ -244,15 +261,15 @@ func Compare(expected, actual *parts.Document, sels []string) (*Report, error)
 
 ## 11. 알려진 한계
 
-- **런 분할에 취약하다.** `<w:t>안녕</w:t><w:t>하세요</w:t>` 와 `<w:t>안녕하세요</w:t>` 는 보이는 텍스트가 같아도 노드 수가 달라 `structure` 로 갈린다. Word·LibreOffice 가 문서를 재저장하면 흔히 일어난다. 이 슬라이스의 주 용도에서는 I2 덕에 일어나지 않지만, **렌더→비교 루프가 실제 오피스 앱을 물면 반드시 걸린다.** README 「다음 작업」 4번(LCS 정렬)이 그 자리다
-- `structure` 이후 그 파트의 남은 노드는 비교되지 않는다. 항목의 `detail` 에 그 사실을 적는다 — 조용히 빠뜨리면 "그 뒤는 같았다"로 읽힌다
+- **런 분할에 취약했다 — [LCS 정렬 설계](2026-08-10-lcs-align-design.md)가 절반만 갚았다.** `<w:t>안녕</w:t><w:t>하세요</w:t>` 와 `<w:t>안녕하세요</w:t>` 는 보이는 텍스트가 같아도 노드 수가 달라 여전히 "같다"로 보지 않는다. 다만 이제는 그 파트를 통째로 포기하지 않고 어디가 다른지(`inserted`/`deleted`)는 짚는다 — 위치는 짚지만 텍스트 수준의 동등성은 별개 문제로 남는다. 진짜 해결(런 병합 정규화)은 그 설계 §9 가 범위 밖으로 미뤘다
+- **더 이상 참이 아니다.** `structure` 이후 그 파트의 남은 노드는 비교되지 않는다던 문장은 위치 정렬 시절의 동작이다. [LCS 정렬 설계](2026-08-10-lcs-align-design.md) 이후 `structure` 는 §6 의 세 조건(상한 초과 / 빈 파트 / `'r'` 구간 앵커 없는 길이 불일치)으로 좁아졌고, **그 어느 경우에도 그 파트의 비교를 멈추지 않는다** — 셋 다 "정렬을 포기하고 위치로 비교했다"는 신고이지 중단이 아니다
 - **스캔 불가 파트는 "다르다"까지만** 말한다 (`docProps/thumbnail.jpeg` 같은 바이너리). 이미지가 바뀐 것과 1픽셀이 바뀐 것을 구별하지 않는다
 - `VolatilePairs` 는 **관찰된 것의 목록이지 완전한 목록이 아니다.** 다른 생산자·다른 버전이 우리가 모르는 휘발성 식별자를 쓰면 그것은 진짜 차이로 보고된다. 새 픽스처가 들어올 때마다 이 목록이 자란다
 - 문자 참조 인코딩 한계(docx 스펙 §13)를 그대로 물려받는다. `Text` 는 디코드된 값이므로 `&#38;` 와 `&amp;` 는 **같다고** 판정된다 — 템플릿 채우기와 반대 방향의 비대칭이다
 
 ## 12. 범위 밖
 
-- **LCS 정렬** — README 「다음 작업」 4번
+- **LCS 정렬** — README 「다음 작업」 4번의 절반이었다. **구현됐다** — [LCS 정렬 설계](2026-08-10-lcs-align-design.md)가 `diff`에 형제 목록 LCS 정렬을 물렸다(`inserted`/`deleted`). 남은 절반(같은 정렬기를 `tmpl.Extract`에 물리는 일)은 그 설계 §9 가 범위 밖으로 남겼다
 - **렌더 비교** — 이 명령은 XML 만 본다. 픽셀·레이아웃은 「다음 작업」 2번
 - **`--fail-on-diff`** — 필요해지기 전에 만들지 않는다 (§3)
 - **`--part` 로 계획 밖 파트 지목** — `Select` 가 계획을 좁히기만 하므로 `Plan` 의 책임 범위가 달라져야 한다 (multipart 스펙 §12 와 같은 이유). §5 의 3단이 계획 밖 파트를 경로 단위로 덮으므로 이 슬라이스에서 아쉬움은 작다
