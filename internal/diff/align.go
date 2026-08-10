@@ -100,9 +100,12 @@ func stableAttrTriples(n xmlscan.Node) [][3]string {
 // maxCells 는 LCS DP 표의 칸 수 상한이다.
 //
 // 표가 형제 수의 곱이라 입력 XML 이 작업량·메모리를 곱으로 부풀릴 수 있다 —
-// plan.go 가 sldIdLst 중복으로 이미 막아둔 부류와 같다. 400만 칸은 int32 로
-// 16MB 이고, 형제 하나가 2000개까지 정상 처리한다는 뜻이다(실측 최대치
-// form-a 의 376개보다 5배 넉넉하다).
+// plan.go 가 sldIdLst 중복으로 이미 막아둔 부류와 같다. 400만 칸이 int32 로
+// 16MB 인 것은 **정사각형**(len(a)==len(b))일 때뿐이다 — 실제 할당은
+// (len(a)+1)*(len(b)+1) 이라 한쪽이 극단으로 치우치면(예: 400만 대 1) 상한
+// 판정(len(a)*len(b))을 통과하고도 약 800만 칸(약 30.5MB)까지 잡을 수 있다.
+// 형제 하나가 2000개까지 정상 처리한다는 것은 정사각형 기준이며(실측 최대치
+// form-a 의 376개보다 5배 넉넉하다), 그 경우엔 16MB 근사치가 맞다.
 const maxCells = 4_000_000
 
 // op 는 정렬 결과의 한 구간이다. 인덱스는 원래 형제 목록 기준이다.
@@ -156,7 +159,11 @@ func alignMiddle(a, b []*node, offA, offB int) ([]op, bool) {
 		return []op{{tag: 'i', aStart: offA, aEnd: offA, bStart: offB, bEnd: offB + len(b)}}, false
 	case len(b) == 0:
 		return []op{{tag: 'd', aStart: offA, aEnd: offA + len(a), bStart: offB, bEnd: offB}}, false
-	case len(a)*len(b) > maxCells:
+	case len(a) > maxCells/len(b):
+		// len(a)*len(b) 로 직접 판정하지 않는 이유: len(a)·len(b) 가 둘 다
+		// 커지면 그 곱이 32비트 int 에서 오버플로해(음수로 wrap) 이 가드를
+		// 무력화할 수 있다. len(b) != 0 은 위 case len(b) == 0 이 보장한다.
+		//
 		// 상한 초과 — 위치 짝짓기용 r 구간 하나로 낸다. 호출자가 앞에서부터
 		// 짝지으므로 이 구간의 결과는 옛 위치 정렬과 같아진다.
 		return []op{{tag: 'r',
