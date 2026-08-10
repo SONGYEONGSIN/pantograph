@@ -81,12 +81,16 @@ LCS 정렬(삽입·삭제·변경 구분)은 하지 않는다 — README 「다�
 
 ## 6. 차이 어휘
 
+**`structure` 의 뜻은 [LCS 정렬 설계](2026-08-10-lcs-align-design.md) §4 이후 좁아졌고, `inserted`·`deleted` 두 kind 가 새로 생겼다.** 아래 표는 그 이후 값이다.
+
 | kind | 뜻 | 항목이 싣는 것 |
 |---|---|---|
 | `text` | 요소가 **직접** 품은 텍스트가 다르다 (`w:t`·`a:t` 만이 아니다 — `<Words>17</Words>` 도 여기 걸린다) | scope, part, path, expected, actual |
 | `attr` | 속성 값이 다르다 / 한쪽에만 있다 | scope, part, path, attr, expected, actual |
 | `elem` | 같은 위치의 요소 타입이 다르다 | scope, part, path, expected, actual |
-| `structure` | 경로 순열이 갈렸다 — 이 파트는 여기서 중단 | scope, part, path, detail |
+| `inserted` | 실제에만 있는 서브트리 | scope, part, path(**실제 기준**), detail(노드 수) |
+| `deleted` | 기대에만 있는 서브트리 | scope, part, path(**기대 기준**), detail(노드 수) |
+| `structure` | **정렬을 포기하고 위치로 비교했다** — 형제가 상한을 넘거나, `'r'` 구간에 매칭 앵커가 없는데 양쪽 길이까지 다를 때(같은 설계 §9). 실제 문서에서는 사실상 나오지 않는다 | scope, part, path, detail |
 | `part_content` | 스캔할 수 없는 파트의 내용이 다르다 | part, detail |
 | `part_missing` | 한쪽에만 있는 파트 | part, detail |
 
@@ -105,7 +109,8 @@ LCS 정렬(삽입·삭제·변경 구분)은 하지 않는다 — README 「다�
   "expected": "deck-a.pptx",
   "actual": "deck-b.pptx",
   "summary": {
-    "text": 11, "attr": 0, "elem": 0, "structure": 1,
+    "text": 11, "attr": 0, "elem": 0, "structure": 0,
+    "inserted": 0, "deleted": 1,
     "part_content": 1, "part_missing": 0,
     "total": 13, "volatile_only": 12
   },
@@ -117,6 +122,12 @@ LCS 정렬(삽입·삭제·변경 구분)은 하지 않는다 — README 「다�
       "expected": "표지", "actual": "겉표지"
     },
     {
+      "kind": "deleted", "scope": "other",
+      "part": "ppt/presentation.xml",
+      "path": "presentation/extLst[1]",
+      "detail": "기대 에만 있는 서브트리 — 노드 3개"
+    },
+    {
       "kind": "part_content",
       "part": "docProps/thumbnail.jpeg",
       "detail": "스캔할 수 없어 내용만 비교했다 — 다르다 (길이 1741 B vs 1938 B)"
@@ -125,7 +136,9 @@ LCS 정렬(삽입·삭제·변경 구분)은 하지 않는다 — README 「다�
 }
 ```
 
-`diffs` 는 발췌다. `summary` 는 이 두 픽스처의 전체 결과이며, `text` 11 은 본문 슬라이드 3 + `docProps/app.xml` 5 + `docProps/core.xml` 3 이다 (§10 의 표).
+(`/tmp/panto diff testdata/real/deck-a.pptx testdata/real/deck-b.pptx` 실측 — `go build -o /tmp/panto ./cmd/panto` 로 빌드한 바이너리의 실제 출력이다.)
+
+`diffs` 는 발췌다(실제 전체는 13건 — `text` 11 · `deleted` 1 · `part_content` 1). `summary` 는 이 두 픽스처의 전체 결과이며, `text` 11 은 본문 슬라이드 3 + `docProps/app.xml` 5 + `docProps/core.xml` 3 이다 (§10 의 표). `deleted` 1 은 `ppt/presentation.xml` 의 `extLst`(안내선) — deck-a 에만 있다.
 
 `volatile_only` 는 **바이트는 다른데 항목이 하나도 안 나온 계획 밖 파트의 수**다. 이 값이 없으면 사용자가 `unzip`+`diff` 로 본 것과 `panto diff` 의 답이 어긋나 보이고, 그 침묵을 설명할 방법이 없다. 12 라고 말해주면 "우리가 알고 무시했다"가 된다.
 
@@ -256,7 +269,7 @@ func Compare(expected, actual *parts.Document, sels []string) (*Report, error)
 
 ## 12. 범위 밖
 
-- **LCS 정렬** — README 「다음 작업」 4번
+- **LCS 정렬** — README 「다음 작업」 4번의 절반이었다. **구현됐다** — [LCS 정렬 설계](2026-08-10-lcs-align-design.md)가 `diff`에 형제 목록 LCS 정렬을 물렸다(`inserted`/`deleted`). 남은 절반(같은 정렬기를 `tmpl.Extract`에 물리는 일)은 그 설계 §9 가 범위 밖으로 남겼다
 - **렌더 비교** — 이 명령은 XML 만 본다. 픽셀·레이아웃은 「다음 작업」 2번
 - **`--fail-on-diff`** — 필요해지기 전에 만들지 않는다 (§3)
 - **`--part` 로 계획 밖 파트 지목** — `Select` 가 계획을 좁히기만 하므로 `Plan` 의 책임 범위가 달라져야 한다 (multipart 스펙 §12 와 같은 이유). §5 의 3단이 계획 밖 파트를 경로 단위로 덮으므로 이 슬라이스에서 아쉬움은 작다

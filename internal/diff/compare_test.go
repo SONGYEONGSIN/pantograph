@@ -220,8 +220,9 @@ func TestSelectorSkipsNonPlanParts(t *testing.T) {
 	}
 }
 
-// TestPartMissingAndInsertion 은 실제 픽스처에 없는 두 경로를 합성 컨테이너로
-// 실행한다 — 파트 수가 다른 경우와 문단 수가 다른 경우.
+// TestPartMissingAndInsertion 은 실제 픽스처에 없는 문단 수가 다른 경우를
+// 합성 컨테이너로 실행한다. part_missing 은 만들지 않는다 — 파트 수가 다른
+// 경우는 TestPartMissingThreeSitesAndScanAnyFallback 이 다룬다.
 //
 // LCS 정렬 이전에는 "두 줄"이 끝에 추가되면 "노드 수가 다르다" structure
 // 항목이 났다. 지금은 정렬이 "한 줄"을 공통 접두사로 매칭하고 남은 "두 줄"
@@ -306,8 +307,9 @@ func miniPptx(t *testing.T, contentTypesXML, sldIdsXML, relsXML string, entries 
 
 // TestPartMissingThreeSitesAndScanAnyFallback 은 최종 리뷰 Important 지적을
 // 잠근다 — treeOf 의 ScanAny 폴백 분기와 part_missing 을 만드는 세 지점이
-// 전부 커버리지 0이었다(기존 TestPartMissingAndStructure 는 이름과 달리
-// part_missing 을 하나도 만들지 않는다 — 그 테스트 자신의 주석이 인정한다).
+// 전부 커버리지 0이었다(TestPartMissingAndInsertion(개명 전 이름
+// TestPartMissingAndStructure)은 이름과 달리 part_missing 을 하나도 만들지
+// 않는다 — 문단 수가 다른 경우만 다룬다).
 //
 // 합성 컨테이너 하나로 넷을 동시에 건다:
 //
