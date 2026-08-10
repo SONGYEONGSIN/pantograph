@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/SONGYEONGSIN/pantograph/internal/align"
 	"github.com/SONGYEONGSIN/pantograph/internal/parts"
 	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
 )
@@ -161,7 +162,7 @@ func compareOtherParts(rep *Report, expected, actual *parts.Document, expName, a
 //
 // 노드 한 쌍의 비교는 예전 그대로다 — 바뀌는 것은 짝을 만드는 방법뿐이다.
 func compareTrees(rep *Report, scope, part string, a, b *xmlscan.Tree) {
-	ra, rb := buildTree(a), buildTree(b)
+	ra, rb := align.BuildTree(a), align.BuildTree(b)
 	if ra == nil && rb == nil {
 		return
 	}
@@ -175,13 +176,13 @@ func compareTrees(rep *Report, scope, part string, a, b *xmlscan.Tree) {
 			Detail: "한쪽 파트에 노드가 없다"})
 		return
 	}
-	sign(ra)
-	sign(rb)
+	align.Sign(ra)
+	align.Sign(rb)
 	comparePair(rep, scope, part, ra, rb)
 }
 
 // comparePair 는 짝지어진 노드 한 쌍을 비교하고 그 자식들을 정렬한다.
-func comparePair(rep *Report, scope, part string, x, y *node) {
+func comparePair(rep *Report, scope, part string, x, y *align.Node) {
 	if x.Type != y.Type {
 		// 같은 자리에 다른 요소가 있다. 그 안을 파고들지 않는다 — 서로 다른
 		// 요소의 자식을 비교하면 항목만 늘고 뜻은 없다. 다만 침묵하지는
@@ -191,7 +192,7 @@ func comparePair(rep *Report, scope, part string, x, y *node) {
 		// 접혀도 소비자는 "거의 같다"로 읽는다.
 		rep.add(Diff{Kind: "elem", Scope: scope, Part: part, Path: x.Path,
 			Expected: ptr(x.Type), Actual: ptr(y.Type),
-			Detail: fmt.Sprintf("타입이 다르다 — 그 안은 비교하지 않았다 (기대 %d노드, 실제 %d노드)", x.size, y.size)})
+			Detail: fmt.Sprintf("타입이 다르다 — 그 안은 비교하지 않았다 (기대 %d노드, 실제 %d노드)", x.Size, y.Size)})
 		return
 	}
 	// 요소가 직접 품은 텍스트다. w:t·a:t 만이 아니라 <Words>17</Words> 도
@@ -206,25 +207,25 @@ func comparePair(rep *Report, scope, part string, x, y *node) {
 }
 
 // alignChildren 은 두 노드의 자식 목록을 정렬하고 구간마다 처리한다.
-func alignChildren(rep *Report, scope, part string, x, y *node) {
-	ops, capped := alignSiblings(x.kids, y.kids)
+func alignChildren(rep *Report, scope, part string, x, y *align.Node) {
+	ops, capped := align.Siblings(x.Kids, y.Kids)
 	if capped {
 		rep.add(Diff{Kind: "structure", Scope: scope, Part: part, Path: x.Path,
 			Detail: fmt.Sprintf("자식이 너무 많아 정렬을 포기하고 위치로 비교했다 — 기대 %d개, 실제 %d개",
-				len(x.kids), len(y.kids))})
+				len(x.Kids), len(y.Kids))})
 	}
 	for _, o := range ops {
-		switch o.tag {
+		switch o.Tag {
 		case 'e':
 			// 서브트리가 통째로 같다. 내려가지 않는다 — 같은 부분은 아예
 			// 순회하지 않는다는 뜻이라 부수적으로 빨라진다.
 		case 'i':
-			for j := o.bStart; j < o.bEnd; j++ {
-				rep.add(subtreeDiff("inserted", scope, part, y.kids[j]))
+			for j := o.BStart; j < o.BEnd; j++ {
+				rep.add(subtreeDiff("inserted", scope, part, y.Kids[j]))
 			}
 		case 'd':
-			for i := o.aStart; i < o.aEnd; i++ {
-				rep.add(subtreeDiff("deleted", scope, part, x.kids[i]))
+			for i := o.AStart; i < o.AEnd; i++ {
+				rep.add(subtreeDiff("deleted", scope, part, x.Kids[i]))
 			}
 		case 'r':
 			// 양쪽에 남았다. 위치로 짝지어 재귀한다 — **이 분기가 기존 결과를
@@ -239,7 +240,7 @@ func alignChildren(rep *Report, scope, part string, x, y *node) {
 			// 다른 것일 수 있다. 정확 해시 LCS + 위치 짝짓기로는 원리적으로 못
 			// 막는다(유사도 매칭이 필요하며 설계 §3 이 정확 해시를 명시적으로
 			// 선택했다) — 알려진 한계이지 이 구현의 결함이 아니다.
-			la, lb := o.aEnd-o.aStart, o.bEnd-o.bStart
+			la, lb := o.AEnd-o.AStart, o.BEnd-o.BStart
 			if la != lb {
 				// 이 구간에 매칭 앵커가 없어 위치로 짝지었다는 뜻이다 — 그
 				// 앵커가 하나라도 있었다면 그 앵커가 부분 구간을 갈랐을
@@ -256,13 +257,13 @@ func alignChildren(rep *Report, scope, part string, x, y *node) {
 				m = lb
 			}
 			for k := 0; k < m; k++ {
-				comparePair(rep, scope, part, x.kids[o.aStart+k], y.kids[o.bStart+k])
+				comparePair(rep, scope, part, x.Kids[o.AStart+k], y.Kids[o.BStart+k])
 			}
-			for i := o.aStart + m; i < o.aEnd; i++ {
-				rep.add(subtreeDiff("deleted", scope, part, x.kids[i]))
+			for i := o.AStart + m; i < o.AEnd; i++ {
+				rep.add(subtreeDiff("deleted", scope, part, x.Kids[i]))
 			}
-			for j := o.bStart + m; j < o.bEnd; j++ {
-				rep.add(subtreeDiff("inserted", scope, part, y.kids[j]))
+			for j := o.BStart + m; j < o.BEnd; j++ {
+				rep.add(subtreeDiff("inserted", scope, part, y.Kids[j]))
 			}
 		}
 	}
@@ -270,13 +271,13 @@ func alignChildren(rep *Report, scope, part string, x, y *node) {
 
 // subtreeDiff 는 서브트리 하나가 통째로 있고 없는 항목을 만든다.
 // 경로는 그 서브트리가 실제로 있는 쪽 기준이다 — deleted 면 기대, inserted 면 실제.
-func subtreeDiff(kind, scope, part string, n *node) Diff {
+func subtreeDiff(kind, scope, part string, n *align.Node) Diff {
 	side := "실제"
 	if kind == "deleted" {
 		side = "기대"
 	}
 	return Diff{Kind: kind, Scope: scope, Part: part, Path: n.Path,
-		Detail: fmt.Sprintf("%s 에만 있는 서브트리 — 노드 %d개", side, n.size)}
+		Detail: fmt.Sprintf("%s 에만 있는 서브트리 — 노드 %d개", side, n.Size)}
 }
 
 // compareAttrs 는 속성 이름의 합집합을 돌며 다른 것마다 항목을 하나씩 낸다.
@@ -285,8 +286,8 @@ func subtreeDiff(kind, scope, part string, n *node) Diff {
 // 네임스페이스 선언(NS == "xmlns")은 뺀다 — 같은 네임스페이스를 다른 접두사로
 // 선언한 두 파일은 XML 로서 같다. 내용이 아니다 (설계 §6).
 func compareAttrs(rep *Report, scope, part string, x, y xmlscan.Node) {
-	xa := attrMap(x)
-	ya := attrMap(y)
+	xa := align.AttrMap(x)
+	ya := align.AttrMap(y)
 	names := make([][2]string, 0, len(xa)+len(ya))
 	for k := range xa {
 		names = append(names, k)
@@ -324,29 +325,4 @@ func compareAttrs(rep *Report, scope, part string, x, y xmlscan.Node) {
 		}
 		rep.add(d)
 	}
-}
-
-// attrMap 은 휘발성과 네임스페이스 선언을 뺀 속성을 (네임스페이스, 로컬명)
-// 짝으로 색인한다.
-//
-// 로컬명만으로 색인하면 안 되는 이유: <p:sldId id="256" r:id="rId2"/> 는
-// xmlscan.Attr 두 개를 낳는데, 접두사를 버리는 xmlscan 설계(scan.go 주석 —
-// "접두사는 문서마다 다를 수 있어 보존하지 않는다") 때문에 **둘 다
-// Name=="id"** 다 — 하나는 슬라이드 정체성(네임스페이스 없음), 하나는
-// relationships 네임스페이스의 관계 참조다. 로컬명 키 맵에 넣으면 원문 순서상
-// 뒤에 오는 쪽이 앞을 덮어써 슬라이드 정체성 id 가 비교에서 통째로 빠지고,
-// 그런데도 diff 는 "차이 없음"을 낸다(최종 리뷰 Critical).
-//
-// NS 를 키에 넣어도 compareAttrs 가 소비자에게 보여주는 Attr 필드에는 로컬명만
-// 싣는다(k[1]) — 어느 네임스페이스인지는 사람이 몰라도 되고, path·part 가
-// 이미 위치를 좁혀준다.
-func attrMap(n xmlscan.Node) map[[2]string]string {
-	m := make(map[[2]string]string)
-	for _, a := range parts.StableAttrs(n) {
-		if a.NS == "xmlns" {
-			continue
-		}
-		m[[2]string{a.NS, a.Name}] = a.Value
-	}
-	return m
 }

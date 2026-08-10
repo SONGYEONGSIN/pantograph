@@ -2,6 +2,7 @@ package diff
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -68,56 +69,6 @@ func TestCompareAttrsIgnoresNamespaceDeclarations(t *testing.T) {
 	}
 }
 
-// TestAttrMapKeepsNamespaceCollidingLocalNames 는 최종 리뷰 Critical 지적을
-// 잠근다 — attrMap 이 로컬명만으로 색인해 <p:sldId id="256" r:id="rId2"/> 같은
-// 마크업에서 속성이 조용히 사라지는 문제.
-//
-// xmlscan.Attr 은 로컬명만 Name 에 담고 접두사는 버린다(scan.go 주석). 그래서
-// "id"(네임스페이스 없음, 슬라이드 정체성)와 "r:id"(relationships 네임스페이스,
-// 관계 참조)가 스캔 후에는 둘 다 Name=="id"로 남는다. attrMap 이 로컬명만으로
-// 맵을 채우면 원문 순서상 뒤에 오는 것이 앞을 덮어써 슬라이드 정체성 id가
-// 통째로 비교에서 빠진다 — 그런데도 diff 는 "차이 없음"을 낸다.
-//
-// 수정 전(로컬명 키)에는 이 테스트가 0개 항목을 낸다: 두 Attrs 슬라이스 모두
-// map[string]string{"id": "rId2"}로 좁혀지고(원문 순서상 r:id 가 나중이라 그
-// 값이 남는다), 두 문서의 r:id 값이 같으므로 차이가 안 보인다.
-func TestAttrMapKeepsNamespaceCollidingLocalNames(t *testing.T) {
-	const relNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-
-	x := xmlscan.Node{
-		Path: "presentation/sldIdLst[1]/sldId[1]",
-		Type: "sldId",
-		Attrs: []xmlscan.Attr{
-			{Name: "id", Value: "256"},             // 슬라이드 정체성 (네임스페이스 없음)
-			{Name: "id", NS: relNS, Value: "rId2"}, // r:id — 관계 참조. 값은 두 쪽이 같다
-		},
-	}
-	y := xmlscan.Node{
-		Path: "presentation/sldIdLst[1]/sldId[1]",
-		Type: "sldId",
-		Attrs: []xmlscan.Attr{
-			{Name: "id", Value: "999"},             // 값이 256→999로 바뀐 슬라이드 정체성
-			{Name: "id", NS: relNS, Value: "rId2"}, // r:id 는 그대로
-		},
-	}
-
-	rep := &Report{}
-	compareAttrs(rep, "body", "ppt/presentation.xml", x, y)
-	if len(rep.Diffs) != 1 {
-		t.Fatalf("id 속성 값이 256→999로 바뀌었는데 %d개 항목이 나왔다 (기대 1개): %+v", len(rep.Diffs), rep.Diffs)
-	}
-	d := rep.Diffs[0]
-	if d.Kind != "attr" || d.Attr != "id" {
-		t.Fatalf("잘못된 항목: %+v", d)
-	}
-	if d.Expected == nil || *d.Expected != "256" {
-		t.Fatalf("expected=%v (기대 %q)", d.Expected, "256")
-	}
-	if d.Actual == nil || *d.Actual != "999" {
-		t.Fatalf("actual=%v (기대 %q)", d.Actual, "999")
-	}
-}
-
 // TestCompareTreesPreservesTrailingWhitespace 는 설계 §6/브리프의 "텍스트
 // 공백을 다듬지 않는다 — xml:space=\"preserve\" 인 w:t 의 끝 공백은 내용이다"
 // 규칙을 잠근다.
@@ -175,7 +126,7 @@ func TestCompareTreesPreservesTrailingWhitespace(t *testing.T) {
 //	(c) 그 뒤에 심어둔 텍스트 차이가 발견된다 — 옛 코드라면 갈린 지점에서
 //	    멈춰 이 텍스트 차이를 절대 볼 수 없었다.
 //
-// buildTree 는 Span 포함 관계로 부모·자식을 구성하므로(align.go 주석) 노드마다
+// align.BuildTree 는 Span 포함 관계로 부모·자식을 구성하므로(align 패키지 주석) 노드마다
 // 실제 Span 을 채운다 — Path 문자열만으로는 트리가 재구성되지 않는다.
 func TestCompareTreesAlignsAcrossDeletionAndFindsDownstreamText(t *testing.T) {
 	a := &xmlscan.Tree{Nodes: []xmlscan.Node{
@@ -250,7 +201,7 @@ func TestCompareTreesAlignsAcrossDeletionAndFindsDownstreamText(t *testing.T) {
 // min(la,lb) 를 la 로 바꾸는 변이(꼬리 시작점 계산이 틀렸는데도 안 걸린다)가
 // 인덱스 초과 패닉을 내는데도 CI 를 통과했다(보고서 참고).
 //
-// 두 트리 모두 공통 앞머리(Anchor)로 시작해 alignSiblings 의 공통 접두사
+// 두 트리 모두 공통 앞머리(Anchor)로 시작해 align.Siblings 의 공통 접두사
 // 잘라내기를 통과시키고, 그 뒤 요소들은 서로 sig 가 겹치지 않게(모두 다른
 // 텍스트) 만들어 LCS 매칭이 하나도 안 생기게 한다 — 그러면
 // gap(len(a), len(b)) 가 직접 앵커 없는 'r' 구간 하나를 낸다
@@ -320,20 +271,20 @@ func TestAlignChildrenAsymmetricReplaceTail(t *testing.T) {
 // `if capped { rep.add(...) }` 이음매에서 실제로 지켜지는지, compareTrees
 // 경로로 직접 확인한다.
 //
-// align_test.go 의 TestAlignSiblingsCapFallsBackAndSaysSo 는 alignSiblings 가
+// align_test.go 의 TestAlignSiblingsCapFallsBackAndSaysSo 는 align.Siblings 가
 // capped=true 를 **돌려주는지**만 본다 — 그 값이 실제로 structure 항목이
 // 되는지는 이 파일 어디에도 없었다. 리뷰어가 `if capped` 를
 // `if false && capped` 로 바꾸고 전체 스위트를 돌려보니 초록으로 끝났다 —
 // L4 를 통째로 삭제해도 아무도 몰랐다는 뜻이다. 이 테스트가 그 이음매를
 // 잠근다(RED 확인은 보고서 참조).
 //
-// 형제 2001개씩(2001×2001 = 4,004,001 > maxCells)을 전부 다른 텍스트로 만들어
-// 앞뒤 공통 잘라내기가 전혀 안 먹게 한다. capped 로 떨어지면 alignChildren 은
-// structure 항목 하나를 내고, 남은 상한 초과 구간은 위치로 짝지어 재귀한다 —
-// 형제 2001개가 전부 자리별로 텍스트만 다르므로 재귀가 text 항목 2001개를
-// 낸다.
+// 형제 2001개씩(2001×2001 = 4,004,001 > align.MaxCells)을 전부 다른 텍스트로
+// 만들어 앞뒤 공통 잘라내기가 전혀 안 먹게 한다. capped 로 떨어지면
+// alignChildren 은 structure 항목 하나를 내고, 남은 상한 초과 구간은 위치로
+// 짝지어 재귀한다 — 형제 2001개가 전부 자리별로 텍스트만 다르므로 재귀가 text
+// 항목 2001개를 낸다.
 func TestCapExceededProducesStructureNotSilentPositionalFallback(t *testing.T) {
-	const n = 2001 // 2001 × 2001 = 4,004,001 > maxCells(4,000,000)
+	const n = 2001 // 2001 × 2001 = 4,004,001 > align.MaxCells(4,000,000)
 	mk := func(prefix string) *xmlscan.Tree {
 		nodes := make([]xmlscan.Node, 0, n+1)
 		nodes = append(nodes, xmlscan.Node{
@@ -344,7 +295,7 @@ func TestCapExceededProducesStructureNotSilentPositionalFallback(t *testing.T) {
 			start := 1 + i*10
 			nodes = append(nodes, xmlscan.Node{
 				Path: fmt.Sprintf("document/p[%d]", i+1), Type: "p",
-				Text: prefix + itoa(i),
+				Text: prefix + strconv.Itoa(i),
 				Span: xmlscan.Span{Start: start, End: start + 5},
 			})
 		}
