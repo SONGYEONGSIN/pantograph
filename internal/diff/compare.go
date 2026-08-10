@@ -240,6 +240,17 @@ func alignChildren(rep *Report, scope, part string, x, y *node) {
 			// 막는다(유사도 매칭이 필요하며 설계 §3 이 정확 해시를 명시적으로
 			// 선택했다) — 알려진 한계이지 이 구현의 결함이 아니다.
 			la, lb := o.aEnd-o.aStart, o.bEnd-o.bStart
+			if la != lb {
+				// 이 구간에 매칭 앵커가 없어 위치로 짝지었다는 뜻이다 — 그
+				// 앵커가 하나라도 있었다면 그 앵커가 부분 구간을 갈랐을
+				// 것이고, 갈린 두 부분 구간이 우연히 길이까지 같을 수는
+				// 있지만 그것도 정확한 짝짓기를 보장하지 않는다. 길이가
+				// 다르면 적어도 하나는 확실히 엉뚱한 것과 짝지어졌다는
+				// 뜻이라 침묵하지 않는다 — 위 주석이 고백하는 한계를
+				// 사용자가 받는 JSON 에도 신호로 남긴다.
+				rep.add(Diff{Kind: "structure", Scope: scope, Part: part, Path: x.Path,
+					Detail: fmt.Sprintf("앵커 없이 위치로 짝지었다 — 기대 %d개, 실제 %d개", la, lb)})
+			}
 			m := la
 			if lb < m {
 				m = lb
