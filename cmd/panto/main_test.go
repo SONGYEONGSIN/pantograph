@@ -676,6 +676,12 @@ func TestDiffNeedsTwoInputs(t *testing.T) {
 }
 
 // twoDocxWithInsertion 은 문단 하나가 삽입된 docx 쌍을 만들어 경로를 돌려준다.
+//
+// 삽입 구간 앞뒤에 완전히 같은 앵커("첫 줄"·"셋째 줄")가 있어 align.Siblings 가
+// 'e'+'i' 만으로 깨끗이 푼다 — 문서 루트에 'r' 이 하나 나오긴 하지만 la=lb=1 이라
+// 꼬리가 비어 자명하게 통과한다. align.Match 의 'r' 꼬리 처리(OnlyA/OnlyB 로
+// 넘기는 두 루프)는 이 쌍만으로는 한 번도 돌지 않는다 — 그 경로는
+// twoDocxWithUnanchoredMismatch 가 잠근다.
 func twoDocxWithInsertion(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -685,6 +691,30 @@ func twoDocxWithInsertion(t *testing.T) (string, string) {
 		t.Fatalf("a 쓰기: %v", err)
 	}
 	if err := os.WriteFile(b, testutil.MinimalDocx([]string{"첫 줄", "새로 낀 줄", "셋째 줄"}), 0o644); err != nil {
+		t.Fatalf("b 쓰기: %v", err)
+	}
+	return a, b
+}
+
+// twoDocxWithUnanchoredMismatch 는 앞뒤 앵커("첫 줄"·"끝 줄")는 같지만 그
+// 사이가 개수까지 다른(a 1개, b 2개) docx 쌍을 만든다.
+//
+// align.Siblings 로 손으로 되짚으면: 앞 공통 p=1("첫 줄"), 뒤 공통 s=1("끝 줄").
+// 가운데 a[1:2]=["중간A"], b[1:3]=["중간B1","중간B2"] 는 서로 sig 가 달라 LCS
+// 매칭이 하나도 없고, alignMiddle 이 la=1·lb=2 인 단일 'r' 구간으로 낸다 —
+// **꼬리가 있는 'r'** 이다. align.Match 에서 m=min(la,lb)=1 이라 "중간A"↔"중간B1"
+// 은 위치로 짝지어지고, "중간B2" 는 꼬리로 남아 OnlyB(B 쪽 꼬리 루프)를 지난다.
+// 이 쌍이 없으면 T5 가 그 두 루프(OnlyA·OnlyB)를 한 번도 안 지난다 — 리뷰가
+// match.go 에 변이(그 두 루프 삭제)를 주입해 실증했다.
+func twoDocxWithUnanchoredMismatch(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.docx")
+	b := filepath.Join(dir, "b.docx")
+	if err := os.WriteFile(a, testutil.MinimalDocx([]string{"첫 줄", "중간A", "끝 줄"}), 0o644); err != nil {
+		t.Fatalf("a 쓰기: %v", err)
+	}
+	if err := os.WriteFile(b, testutil.MinimalDocx([]string{"첫 줄", "중간B1", "중간B2", "끝 줄"}), 0o644); err != nil {
 		t.Fatalf("b 쓰기: %v", err)
 	}
 	return a, b
@@ -746,59 +776,76 @@ func TestTmplExtractAllowFlagWritesUnrepresented(t *testing.T) {
 // 두 명령이 각자 재귀를 갖고 있어(diff 의 alignChildren, align.Match) 'r' 구간의
 // 위치 짝짓기 규칙이 복제돼 있다. 갈라지는 날 같은 문서에 다른 답을 내는데,
 // 그것이 바로 이 슬라이스가 없애려던 상태다(설계 T5).
+//
+// 두 정렬 모양을 표로 돈다 — 앵커가 있어 꼬리 없는 'r'(twoDocxWithInsertion)과
+// 앵커가 없어 꼬리 있는 'r'(twoDocxWithUnanchoredMismatch). 리뷰가 첫 번째
+// 쌍만으로는 align.Match 의 'r' 꼬리 루프(OnlyA·OnlyB)가 한 번도 안 돈다는 것을
+// 변이 주입으로 실증했다 — 그 루프를 지우고 돌려도 첫 번째 쌍은 통과했다. 두
+// 번째 쌍이 그 루프를 실제로 지난다.
 func TestT5DiffAndTmplAgreeOnAlignment(t *testing.T) {
-	a, b := twoDocxWithInsertion(t)
-	dir := t.TempDir()
-	schema := filepath.Join(dir, "s.json")
+	cases := []struct {
+		name string
+		pair func(t *testing.T) (string, string)
+	}{
+		{"앵커 있음_꼬리 없는 r", twoDocxWithInsertion},
+		{"앵커 없음_꼬리 있는 r", twoDocxWithUnanchoredMismatch},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, b := c.pair(t)
+			dir := t.TempDir()
+			schema := filepath.Join(dir, "s.json")
 
-	diffOut := captureStdout(t, func() {
-		if code := cmdDiff([]string{a, b}); code != exitOK {
-			t.Fatalf("diff exit=%d", code)
-		}
-	})
-	if code := cmdTmpl([]string{"extract", a, b,
-		"-o", filepath.Join(dir, "t.docx"), "--schema", schema, "--allow-unrepresented"}); code != exitOK {
-		t.Fatalf("tmpl extract exit=%d", code)
-	}
+			diffOut := captureStdout(t, func() {
+				if code := cmdDiff([]string{a, b}); code != exitOK {
+					t.Fatalf("diff exit=%d", code)
+				}
+			})
+			if code := cmdTmpl([]string{"extract", a, b,
+				"-o", filepath.Join(dir, "t.docx"), "--schema", schema, "--allow-unrepresented"}); code != exitOK {
+				t.Fatalf("tmpl extract exit=%d", code)
+			}
 
-	var rep struct {
-		Diffs []struct{ Kind, Part, Path string } `json:"diffs"`
-	}
-	if err := json.Unmarshal([]byte(diffOut), &rep); err != nil {
-		t.Fatalf("diff 출력 파싱: %v", err)
-	}
-	fromDiff := map[string]bool{}
-	for _, d := range rep.Diffs {
-		if d.Kind == "inserted" || d.Kind == "deleted" {
-			fromDiff[d.Part+"|"+d.Path] = true
-		}
-	}
+			var rep struct {
+				Diffs []struct{ Kind, Part, Path string } `json:"diffs"`
+			}
+			if err := json.Unmarshal([]byte(diffOut), &rep); err != nil {
+				t.Fatalf("diff 출력 파싱: %v", err)
+			}
+			fromDiff := map[string]bool{}
+			for _, d := range rep.Diffs {
+				if d.Kind == "inserted" || d.Kind == "deleted" {
+					fromDiff[d.Part+"|"+d.Path] = true
+				}
+			}
 
-	raw, err := os.ReadFile(schema)
-	if err != nil {
-		t.Fatalf("스키마 읽기: %v", err)
-	}
-	var sch struct {
-		Unrepresented []struct{ Part, Path string } `json:"unrepresented"`
-	}
-	if err := json.Unmarshal(raw, &sch); err != nil {
-		t.Fatalf("스키마 파싱: %v", err)
-	}
-	fromTmpl := map[string]bool{}
-	for _, u := range sch.Unrepresented {
-		fromTmpl[u.Part+"|"+u.Path] = true
-	}
+			raw, err := os.ReadFile(schema)
+			if err != nil {
+				t.Fatalf("스키마 읽기: %v", err)
+			}
+			var sch struct {
+				Unrepresented []struct{ Part, Path string } `json:"unrepresented"`
+			}
+			if err := json.Unmarshal(raw, &sch); err != nil {
+				t.Fatalf("스키마 파싱: %v", err)
+			}
+			fromTmpl := map[string]bool{}
+			for _, u := range sch.Unrepresented {
+				fromTmpl[u.Part+"|"+u.Path] = true
+			}
 
-	if len(fromDiff) == 0 {
-		t.Fatal("diff 가 inserted/deleted 를 하나도 안 냈다 — 이 쌍은 구조가 다르다")
-	}
-	if len(fromDiff) != len(fromTmpl) {
-		t.Fatalf("경로 집합 크기가 다르다 — diff %d, tmpl %d\n  diff=%v\n  tmpl=%v",
-			len(fromDiff), len(fromTmpl), fromDiff, fromTmpl)
-	}
-	for k := range fromDiff {
-		if !fromTmpl[k] {
-			t.Errorf("diff 에만 있는 경로: %s", k)
-		}
+			if len(fromDiff) == 0 {
+				t.Fatal("diff 가 inserted/deleted 를 하나도 안 냈다 — 이 쌍은 구조가 다르다")
+			}
+			if len(fromDiff) != len(fromTmpl) {
+				t.Fatalf("경로 집합 크기가 다르다 — diff %d, tmpl %d\n  diff=%v\n  tmpl=%v",
+					len(fromDiff), len(fromTmpl), fromDiff, fromTmpl)
+			}
+			for k := range fromDiff {
+				if !fromTmpl[k] {
+					t.Errorf("diff 에만 있는 경로: %s", k)
+				}
+			}
+		})
 	}
 }
