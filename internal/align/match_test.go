@@ -1,6 +1,8 @@
 package align
 
 import (
+	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/SONGYEONGSIN/pantograph/internal/xmlscan"
@@ -64,16 +66,16 @@ func TestMatchPairsEqualAndReplace(t *testing.T) {
 		[3]string{"body/p[2]", "p", ""},
 		[3]string{"body/p[2]/t[1]", "t", "실제"},
 	)
-	pairs, onlyA, onlyB := Match(a, b)
-	if len(onlyA) != 0 || len(onlyB) != 0 {
-		t.Fatalf("구조가 같은데 한쪽에만 있는 것이 나왔다: A=%v B=%v", paths(onlyA), paths(onlyB))
+	res := Match(a, b)
+	if len(res.OnlyA) != 0 || len(res.OnlyB) != 0 {
+		t.Fatalf("구조가 같은데 한쪽에만 있는 것이 나왔다: A=%v B=%v", paths(res.OnlyA), paths(res.OnlyB))
 	}
 	// 노드 5개가 전부 짝지어져야 한다 — 'e' 서브트리(p[1]) 안쪽도 포함이다.
-	if len(pairs) != 5 {
-		t.Fatalf("짝이 %d개 (기대 5): %+v", len(pairs), pairs)
+	if len(res.Pairs) != 5 {
+		t.Fatalf("짝이 %d개 (기대 5): %+v", len(res.Pairs), res.Pairs)
 	}
 	got := map[string]string{}
-	for _, p := range pairs {
+	for _, p := range res.Pairs {
 		got[p.A.Path] = p.B.Path
 	}
 	for _, want := range []string{"body", "body/p[1]", "body/p[1]/t[1]", "body/p[2]", "body/p[2]/t[1]"} {
@@ -98,21 +100,21 @@ func TestMatchReportsOnlySideSubtrees(t *testing.T) {
 		[3]string{"body/p[2]", "p", ""},
 		[3]string{"body/p[2]/t[1]", "t", "새로"},
 	)
-	pairs, onlyA, onlyB := Match(a, b)
-	if len(onlyA) != 0 {
-		t.Fatalf("기대에만 있는 것이 나왔다: %v", paths(onlyA))
+	res := Match(a, b)
+	if len(res.OnlyA) != 0 {
+		t.Fatalf("기대에만 있는 것이 나왔다: %v", paths(res.OnlyA))
 	}
-	if len(onlyB) != 1 {
-		t.Fatalf("실제에만 있는 서브트리가 %d개 (기대 1 — 문단 하나): %v", len(onlyB), paths(onlyB))
+	if len(res.OnlyB) != 1 {
+		t.Fatalf("실제에만 있는 서브트리가 %d개 (기대 1 — 문단 하나): %v", len(res.OnlyB), paths(res.OnlyB))
 	}
-	if onlyB[0].Path != "body/p[2]" {
-		t.Fatalf("경로가 %q (기대 body/p[2])", onlyB[0].Path)
+	if res.OnlyB[0].Path != "body/p[2]" {
+		t.Fatalf("경로가 %q (기대 body/p[2])", res.OnlyB[0].Path)
 	}
-	if onlyB[0].Size != 2 {
-		t.Fatalf("서브트리 노드 수가 %d (기대 2 — p 와 t)", onlyB[0].Size)
+	if res.OnlyB[0].Size != 2 {
+		t.Fatalf("서브트리 노드 수가 %d (기대 2 — p 와 t)", res.OnlyB[0].Size)
 	}
-	if len(pairs) != 3 {
-		t.Fatalf("짝이 %d개 (기대 3 — body, p[1], t[1]): %v", len(pairs), pairs)
+	if len(res.Pairs) != 3 {
+		t.Fatalf("짝이 %d개 (기대 3 — body, p[1], t[1]): %v", len(res.Pairs), res.Pairs)
 	}
 }
 
@@ -130,9 +132,57 @@ func TestMatchStopsAtTypeMismatch(t *testing.T) {
 		[3]string{"body/tbl[1]", "tbl", ""},
 		[3]string{"body/tbl[1]/t[1]", "t", "안쪽"},
 	)
-	pairs, _, _ := Match(a, b)
+	res := Match(a, b)
 	// body 와 (p ↔ tbl) 둘만 짝지어져야 한다 — 그 안쪽은 안 본다.
-	if len(pairs) != 2 {
-		t.Fatalf("짝이 %d개 (기대 2 — 루트와 타입 불일치 쌍까지): %+v", len(pairs), pairs)
+	if len(res.Pairs) != 2 {
+		t.Fatalf("짝이 %d개 (기대 2 — 루트와 타입 불일치 쌍까지): %+v", len(res.Pairs), res.Pairs)
+	}
+}
+
+// TestMatchCappedReportsPositionalFallback 은 리뷰어의 Minor 지적을 잠근다 —
+// Siblings 가 상한(MaxCells)을 넘어 위치 정렬로 떨어지면 그 사실이
+// MatchResult.Capped 에 실려야 한다. 안 실리면 호출자(tmpl)가 앵커 없는
+// 우연한 위치 일치를 가변 키로 오인할 수 있다 — align.go 의 Siblings 계약이
+// "조용히 위치 정렬로 떨어지면 사용자는 정렬이 돌았다고 믿는다" 고 못박은
+// 지점이다.
+//
+// internal/diff 의 TestCapExceededProducesStructureNotSilentPositionalFallback
+// 과 같은 방식이다 — 형제 2001개씩(2001×2001=4,004,001 > MaxCells)을 전부
+// 다른 텍스트로 만들어 앞뒤 공통 잘라내기가 전혀 안 먹게 한다.
+func TestMatchCappedReportsPositionalFallback(t *testing.T) {
+	const n = 2001 // 2001 × 2001 = 4,004,001 > MaxCells(4,000,000)
+	mk := func(prefix string) *Node {
+		nodes := make([]xmlscan.Node, 0, n+1)
+		nodes = append(nodes, xmlscan.Node{
+			Path: "body", Type: "body",
+			Span: xmlscan.Span{Start: 0, End: n*10 + 10},
+		})
+		for i := 0; i < n; i++ {
+			start := 1 + i*10
+			nodes = append(nodes, xmlscan.Node{
+				Path: fmt.Sprintf("body/p[%d]", i+1), Type: "p",
+				Text: prefix + strconv.Itoa(i),
+				Span: xmlscan.Span{Start: start, End: start + 5},
+			})
+		}
+		root := BuildTree(&xmlscan.Tree{Nodes: nodes})
+		Sign(root)
+		return root
+	}
+	a := mk("A")
+	b := mk("B") // 접두사가 달라 하나도 안 겹친다 — 앞뒤 잘라내기가 안 먹는다
+
+	res := Match(a, b)
+
+	if len(res.Capped) != 1 {
+		t.Fatalf("Capped 가 %d개 (기대 1 — body 하나): %v", len(res.Capped), paths(res.Capped))
+	}
+	if res.Capped[0].Path != "body" {
+		t.Fatalf("Capped 경로가 %q (기대 body)", res.Capped[0].Path)
+	}
+	// 상한을 넘어도 비교를 멈추지 않는다 — 위치로 짝지어진 Pairs 는 여전히
+	// 나온다(diff 쪽 L4 와 같은 정신).
+	if len(res.Pairs) != n+1 {
+		t.Fatalf("Pairs 가 %d개 (기대 %d — body + 형제 %d개, 위치로 짝지어졌다)", len(res.Pairs), n+1, n)
 	}
 }
