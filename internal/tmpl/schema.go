@@ -25,4 +25,28 @@ type Schema struct {
 	Hash string `json:"hash"`
 
 	Keys []Key `json:"keys"`
+
+	// Unrepresented 는 이 템플릿이 표현하지 못하는 서브트리들이다.
+	// **비어 있으면 필드 자체가 나오지 않는다** — 구조가 같은 문서에서 뽑은
+	// 스키마는 이 슬라이스 이전과 바이트 동일해야 한다(설계 T1).
+	Unrepresented []Unrepresented `json:"unrepresented,omitempty"`
+}
+
+// Unrepresented 는 템플릿이 표현하지 못하는 서브트리 하나다.
+//
+// 템플릿은 base 의 바이트에 setText 를 얹은 것이고 patch 의 연산은 setText 와
+// replaceRaw 둘뿐이라, "이 문단은 어떤 문서에는 있고 어떤 문서에는 없다" 를
+// 담을 수단이 없다(설계 §2). 그래서 그런 서브트리는 키 후보에서 빼고 여기
+// 남긴다 — **도구가 자기가 못 하는 것을 스스로 말한다.**
+type Unrepresented struct {
+	Doc  string `json:"doc"`  // 어느 문서와 비교하다 나왔나
+	Part string `json:"part"` // 물리 파트 경로
+	Path string `json:"path"` // 그 서브트리의 루트 경로
+
+	// Side 는 어느 쪽에만 있는지다. base 에만 있으면 템플릿에 남아 그 문서를
+	// 재현할 때 **지워지지 않고**, 다른 문서에만 있으면 템플릿에 자리가 **없다**.
+	// 두 실패 모양이 다르므로 구분해서 싣는다.
+	Side string `json:"side"`
+
+	Nodes int `json:"nodes"` // 서브트리의 노드 수 — 버려지는 무게
 }

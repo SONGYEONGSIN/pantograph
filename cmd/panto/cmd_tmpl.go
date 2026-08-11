@@ -66,7 +66,7 @@ func cmdTmplExtract(args []string) int {
 	// word/document.xml 하나, pptx 는 슬라이드마다). 어느 문서가 문제인지는
 	// 에러에서 되짚을 수 없으므로 입력 목록 전체를 경로로 단다 — Detail 이
 	// 문제의 엔트리 이름을 갖고 있다.
-	tp, sch, errs, err := tmpl.Extract(pkgs, names)
+	tp, sch, errs, err := tmpl.Extract(pkgs, names, false)
 	if err != nil {
 		return fail(strings.Join(inputs, ", "), err)
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/SONGYEONGSIN/pantograph/internal/align"
 	"github.com/SONGYEONGSIN/pantograph/internal/opc"
 	"github.com/SONGYEONGSIN/pantograph/internal/parts"
 	"github.com/SONGYEONGSIN/pantograph/internal/patch"
@@ -13,8 +14,12 @@ import (
 // Extract 는 같은 양식 문서 N벌에서 템플릿과 스키마를 뽑는다.
 // pkgs[0] 이 베이스이며 템플릿은 베이스를 기반으로 만들어진다.
 //
+// allowUnrepresented 가 false 이면 표현 못 하는 서브트리가 하나라도 있을 때
+// 거절한다(unrepresented_structure). true 이면 공통부에서만 키를 뽑고 나머지를
+// Schema.Unrepresented 에 신고한다(설계 §3).
+//
 // 반환된 []patch.Error 가 비어있지 않으면 템플릿·스키마는 nil 이다.
-func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patch.Error, error) {
+func Extract(pkgs []*opc.Package, names []string, allowUnrepresented bool) (*opc.Package, *Schema, []patch.Error, error) {
 	if len(pkgs) < 2 {
 		return nil, nil, []patch.Error{{
 			Path:   firstPartName(pkgs),
@@ -46,53 +51,128 @@ func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patc
 		}
 	}
 
-	// 2) 파트별로 구조 정렬 → diffMarkup → 가변부 판별.
+	// 2) 파트별로 base 와 각 문서를 정렬 → diffMarkup → 가변부 판별.
 	//    키 번호는 파트를 가로질러 이어진다 — 스키마의 데이터 파일이
 	//    {"k1": ..., "k2": ...} 형태의 평평한 맵이라 파트별로 번호가 겹치면 충돌한다.
 	var keys []Key
 	var ops []patch.Op
+	var unrep []Unrepresented
+
 	for _, pt := range basePlan {
-		trees := make([]*xmlscan.Tree, len(docs))
-		for i, d := range docs {
-			tr, err := d.Tree(pt.Name)
+		baseTree, err := base.Tree(pt.Name)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("%s: %w", names[0], err)
+		}
+		baseRoot := align.BuildTree(baseTree)
+		if baseRoot == nil {
+			continue // 노드가 없는 파트 — 볼 것이 없다
+		}
+		align.Sign(baseRoot)
+
+		// 문서마다 base 와 짝짓는다. Extract 는 base 대 각 문서를 따로 보므로
+		// 어떤 노드는 doc1 과는 매칭되고 doc2 와는 안 될 수 있다.
+		matched := make([]map[*align.Node]*align.Node, len(docs))
+		for i := 1; i < len(docs); i++ {
+			tr, err := docs[i].Tree(pt.Name)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("%s: %w", names[i], err)
 			}
-			trees[i] = tr
-		}
-		baseTree := trees[0]
+			root := align.BuildTree(tr)
+			align.Sign(root)
 
-		for i := 1; i < len(trees); i++ {
-			if e := diffStructure(baseTree, trees[i], names[0], names[i]); e != nil {
-				return nil, nil, []patch.Error{*e}, nil
+			res := align.Match(baseRoot, root)
+			m := make(map[*align.Node]*align.Node, len(res.Pairs))
+			for _, p := range res.Pairs {
+				m[p.A] = p.B
+			}
+			matched[i] = m
+
+			for _, n := range res.OnlyA {
+				unrep = append(unrep, Unrepresented{
+					Doc: names[i], Part: pt.Name, Path: n.Path,
+					Side: names[0] + " 에만", Nodes: n.Size})
+			}
+			for _, n := range res.OnlyB {
+				unrep = append(unrep, Unrepresented{
+					Doc: names[i], Part: pt.Name, Path: n.Path,
+					Side: names[i] + " 에만", Nodes: n.Size})
+			}
+
+			// Capped 는 "짝지었다" 가 아니라 "같은 자리에 놓였다" 다 — 자식 정렬을
+			// 상한 초과로 포기하고 위치로만 묶은 부모 노드들이다. base 좌표계가
+			// 정답인 tmpl 에서 그 밑에서 나온 가변 키는 우연한 위치 일치일 수 있어
+			// 조용히 신뢰할 수 없다. 그래서 같은 Unrepresented 채널로 신고해
+			// 기본 거절에 태운다(실측상 실제 문서의 최대 형제 수 376개는 상한
+			// 2000×2000 에 한참 못 미쳐 현재는 이론적 경로다).
+			for _, n := range res.Capped {
+				unrep = append(unrep, Unrepresented{
+					Doc: names[i], Part: pt.Name, Path: n.Path,
+					Side: "정렬 상한 초과로 위치 짝짓기(" + names[0] + " vs " + names[i] + ")", Nodes: n.Size})
 			}
 		}
 
-		for idx, bn := range baseTree.Nodes {
-			if e := diffMarkup(bn, trees, idx, names); e != nil {
-				return nil, nil, []patch.Error{*e}, nil
-			}
-			if bn.Type != "t" {
-				continue
-			}
-			varies := false
-			for i := 1; i < len(trees); i++ {
-				if trees[i].Nodes[idx].Text != bn.Text {
-					varies = true
+		// base 를 pre-order 로 돌며 후보를 판정한다.
+		// **모든 문서에서 매칭된 노드만** 후보다 — 어느 문서의 값을 sample 로
+		// 삼을지 정할 수 없으면 키가 될 수 없다(설계 §5 규칙 1).
+		var walk func(n *align.Node) *patch.Error
+		walk = func(n *align.Node) *patch.Error {
+			nodes := make([]xmlscan.Node, len(docs))
+			nodes[0] = n.Node
+			all := true
+			for i := 1; i < len(docs); i++ {
+				o, ok := matched[i][n]
+				if !ok {
+					all = false
 					break
 				}
+				nodes[i] = o.Node
 			}
-			if !varies {
-				continue
+			if all {
+				if e := diffMarkup(nodes, names); e != nil {
+					return e
+				}
+				if n.Type == "t" {
+					varies := false
+					for i := 1; i < len(docs); i++ {
+						if nodes[i].Text != n.Text {
+							varies = true
+							break
+						}
+					}
+					if varies {
+						key := "k" + strconv.Itoa(len(keys)+1)
+						samples := make([]string, len(docs))
+						for i := range nodes {
+							samples[i] = nodes[i].Text
+						}
+						keys = append(keys, Key{Key: key, Part: pt.Name, Path: n.Path, Samples: samples})
+						ops = append(ops, patch.Op{Op: "setText", Part: pt.Name,
+							Path: n.Path, Text: "{{" + key + "}}"})
+					}
+				}
 			}
-			key := "k" + strconv.Itoa(len(keys)+1)
-			samples := make([]string, len(trees))
-			for i := range trees {
-				samples[i] = trees[i].Nodes[idx].Text
+			for _, k := range n.Kids {
+				if e := walk(k); e != nil {
+					return e
+				}
 			}
-			keys = append(keys, Key{Key: key, Part: pt.Name, Path: bn.Path, Samples: samples})
-			ops = append(ops, patch.Op{Op: "setText", Part: pt.Name, Path: bn.Path, Text: "{{" + key + "}}"})
+			return nil
 		}
+		if e := walk(baseRoot); e != nil {
+			return nil, nil, []patch.Error{*e}, nil
+		}
+	}
+
+	// 표현 못 하는 것이 있으면 기본은 거절이다 — 단서는 무시할 수 있지만
+	// 실패는 무시할 수 없다(설계 §3).
+	if len(unrep) > 0 && !allowUnrepresented {
+		return nil, nil, []patch.Error{{
+			Path:   unrep[0].Part,
+			Reason: "unrepresented_structure",
+			Detail: fmt.Sprintf("템플릿이 표현하지 못하는 서브트리가 %d개다 (처음: %s 의 %s, %s). "+
+				"--allow-unrepresented 를 주면 공통부만 뽑고 나머지를 스키마에 신고한다",
+				len(unrep), unrep[0].Doc, unrep[0].Path, unrep[0].Side),
+		}}, nil
 	}
 
 	// 3) 베이스의 사본에 패치를 적용해 템플릿을 만든다
@@ -108,7 +188,7 @@ func Extract(pkgs []*opc.Package, names []string) (*opc.Package, *Schema, []patc
 		return nil, nil, errs, nil
 	}
 
-	return tp, &Schema{Base: names[0], Hash: pkgs[0].Hash, Keys: keys}, nil, nil
+	return tp, &Schema{Base: names[0], Hash: pkgs[0].Hash, Keys: keys, Unrepresented: unrep}, nil, nil
 }
 
 // firstPartName 은 too_few_documents 에러의 Path 로 쓸 파트명을 낸다.
@@ -160,42 +240,19 @@ func diffPartSet(a, b []parts.Part, an, bn string) *patch.Error {
 	return nil
 }
 
-// diffStructure 는 두 트리의 경로 순열이 같은지 본다.
-func diffStructure(a, b *xmlscan.Tree, an, bn string) *patch.Error {
-	n := len(a.Nodes)
-	if len(b.Nodes) < n {
-		n = len(b.Nodes)
-	}
-	for i := 0; i < n; i++ {
-		if a.Nodes[i].Path != b.Nodes[i].Path {
-			return &patch.Error{
-				Path:   a.Nodes[i].Path,
-				Reason: "structure_mismatch",
-				Detail: fmt.Sprintf("%s 는 %s, %s 는 %s", an, a.Nodes[i].Path, bn, b.Nodes[i].Path),
-			}
-		}
-	}
-	if len(a.Nodes) != len(b.Nodes) {
-		longer, name, short := a, an, len(b.Nodes)
-		if len(b.Nodes) > len(a.Nodes) {
-			longer, name, short = b, bn, len(a.Nodes)
-		}
-		return &patch.Error{
-			Path:   longer.Nodes[short].Path,
-			Reason: "structure_mismatch",
-			Detail: fmt.Sprintf("%s 에만 있는 노드 (노드 수 %d vs %d)", name, len(a.Nodes), len(b.Nodes)),
-		}
-	}
-	return nil
-}
-
-// diffMarkup 은 요소 자신의 마크업(타입 + 휘발성 제외 속성 + 텍스트 요소가 아닌
-// 요소의 직접 텍스트)이 같은지 본다.
-// 자손의 텍스트는 여기서 보지 않는다 — 그건 가변부 판별의 몫이다.
-func diffMarkup(bn xmlscan.Node, trees []*xmlscan.Tree, idx int, names []string) *patch.Error {
+// diffMarkup 은 짝지어진 노드들의 마크업이 같은지 본다.
+// nodes[0] 이 base 이고 nodes[i] 가 names[i] 문서의 짝이다.
+// 본문은 예전 그대로다 — 정렬은 "어느 노드끼리 비교할지" 만 바꾸지
+// "무엇을 차이로 볼지" 는 안 바꾼다(설계 §5 규칙 2).
+//
+// 요소 자신의 마크업(타입 + 휘발성 제외 속성 + 텍스트 요소가 아닌 요소의 직접
+// 텍스트)이 같은지 본다. 자손의 텍스트는 여기서 보지 않는다 — 그건 가변부
+// 판별의 몫이다.
+func diffMarkup(nodes []xmlscan.Node, names []string) *patch.Error {
+	bn := nodes[0]
 	baseAttrs := parts.StableAttrs(bn)
-	for i := 1; i < len(trees); i++ {
-		other := trees[i].Nodes[idx]
+	for i := 1; i < len(nodes); i++ {
+		other := nodes[i]
 		if other.Type != bn.Type {
 			return &patch.Error{
 				Path:   bn.Path,
