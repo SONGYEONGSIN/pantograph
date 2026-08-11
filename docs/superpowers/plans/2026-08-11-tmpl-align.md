@@ -168,7 +168,8 @@ tmpl 이 diff 를 import 하면 diff 설계 §8 이 금지한 방향의 대칭�
 - Consumes: Task 1 의 `Node`·`Op`·`Siblings`
 - Produces:
   - `type Pair struct { A, B *Node }`
-  - `func Match(a, b *Node) (pairs []Pair, onlyA, onlyB []*Node)`
+  - `type MatchResult struct { Pairs []Pair; OnlyA, OnlyB, Capped []*Node }`
+  - `func Match(a, b *Node) MatchResult`
 
 **배경:** `diff` 는 짝을 만들며 곧바로 항목을 뱉지만(`alignChildren`), `tmpl` 은 **짝 목록을 받아 나중에 판단**해야 한다 — "이 노드가 **모든** 문서에서 매칭됐는가" 는 문서를 다 본 뒤에야 답할 수 있기 때문이다.
 
