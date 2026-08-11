@@ -29,6 +29,7 @@ func cmdTmpl(args []string) int {
 func cmdTmplExtract(args []string) int {
 	var inputs []string
 	var out, schemaPath string
+	var allowUnrepresented bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-o":
@@ -43,6 +44,8 @@ func cmdTmplExtract(args []string) int {
 				return die(exitInput, "--schema 뒤에 출력 경로가 필요하다")
 			}
 			schemaPath = args[i]
+		case "--allow-unrepresented":
+			allowUnrepresented = true
 		default:
 			inputs = append(inputs, args[i])
 		}
@@ -66,7 +69,11 @@ func cmdTmplExtract(args []string) int {
 	// word/document.xml 하나, pptx 는 슬라이드마다). 어느 문서가 문제인지는
 	// 에러에서 되짚을 수 없으므로 입력 목록 전체를 경로로 단다 — Detail 이
 	// 문제의 엔트리 이름을 갖고 있다.
-	tp, sch, errs, err := tmpl.Extract(pkgs, names, false)
+	//
+	// --allow-unrepresented 는 "이 템플릿이 입력 전부를 표현하지는 못한다" 를
+	// 사용자가 명시적으로 사는 자리다. 기본이 거절인 이유는 단서는 무시할 수
+	// 있지만 실패는 무시할 수 없기 때문이다 (설계 §3).
+	tp, sch, errs, err := tmpl.Extract(pkgs, names, allowUnrepresented)
 	if err != nil {
 		return fail(strings.Join(inputs, ", "), err)
 	}

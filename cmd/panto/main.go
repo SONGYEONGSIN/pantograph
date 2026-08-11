@@ -39,7 +39,7 @@ func usage() {
   panto dump  <in.docx|in.pptx> [--part <선택자>]
   panto diff  <expected> <actual> [--part <선택자>]
   panto apply <in.docx|in.pptx> -p <patch.json> -o <out>
-  panto tmpl extract <a> <b> [...] -o <tmpl> --schema <schema.json>
+  panto tmpl extract <a> <b> [...] -o <tmpl> --schema <schema.json> [--allow-unrepresented]
   panto tmpl fill    <tmpl> --schema <schema.json> -d <data.json> -o <out>
 
 선택자(--part):
