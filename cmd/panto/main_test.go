@@ -679,9 +679,10 @@ func TestDiffNeedsTwoInputs(t *testing.T) {
 //
 // 삽입 구간 앞뒤에 완전히 같은 앵커("첫 줄"·"셋째 줄")가 있어 align.Siblings 가
 // 'e'+'i' 만으로 깨끗이 푼다 — 문서 루트에 'r' 이 하나 나오긴 하지만 la=lb=1 이라
-// 꼬리가 비어 자명하게 통과한다. align.Match 의 'r' 꼬리 처리(OnlyA/OnlyB 로
-// 넘기는 두 루프)는 이 쌍만으로는 한 번도 돌지 않는다 — 그 경로는
-// twoDocxWithUnanchoredMismatch 가 잠근다.
+// 꼬리가 비어 자명하게 통과한다. align.Match 의 'r' 꼬리 처리(OnlyA·OnlyB 로
+// 넘기는 두 루프) 는 이 쌍만으로는 **어느 쪽도** 돌지 않는다 — 그 두 방향은
+// 아래 twoDocxWithUnanchoredMismatchBLonger(OnlyB)·
+// twoDocxWithUnanchoredMismatchALonger(OnlyA)가 한 방향씩 나눠 잠근다.
 func twoDocxWithInsertion(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -696,17 +697,19 @@ func twoDocxWithInsertion(t *testing.T) (string, string) {
 	return a, b
 }
 
-// twoDocxWithUnanchoredMismatch 는 앞뒤 앵커("첫 줄"·"끝 줄")는 같지만 그
-// 사이가 개수까지 다른(a 1개, b 2개) docx 쌍을 만든다.
+// twoDocxWithUnanchoredMismatchBLonger 는 앞뒤 앵커("첫 줄"·"끝 줄")는 같지만
+// 그 사이가 b 쪽이 더 많은(a 1개, b 2개) docx 쌍을 만든다.
 //
 // align.Siblings 로 손으로 되짚으면: 앞 공통 p=1("첫 줄"), 뒤 공통 s=1("끝 줄").
 // 가운데 a[1:2]=["중간A"], b[1:3]=["중간B1","중간B2"] 는 서로 sig 가 달라 LCS
 // 매칭이 하나도 없고, alignMiddle 이 la=1·lb=2 인 단일 'r' 구간으로 낸다 —
 // **꼬리가 있는 'r'** 이다. align.Match 에서 m=min(la,lb)=1 이라 "중간A"↔"중간B1"
-// 은 위치로 짝지어지고, "중간B2" 는 꼬리로 남아 OnlyB(B 쪽 꼬리 루프)를 지난다.
-// 이 쌍이 없으면 T5 가 그 두 루프(OnlyA·OnlyB)를 한 번도 안 지난다 — 리뷰가
-// match.go 에 변이(그 두 루프 삭제)를 주입해 실증했다.
-func twoDocxWithUnanchoredMismatch(t *testing.T) (string, string) {
+// 은 위치로 짝지어지고, "중간B2" 는 BStart+m..BEnd 꼬리로 남는다 —
+// **OnlyB 루프만** 돈다. la=1=m 이라 AStart+m..AEnd 는 비어 있어 OnlyA
+// 루프는 반복 0회로 자명하게 통과할 뿐 실제로 검증하지 않는다 — 재리뷰가
+// OnlyA 루프만 지우는 변이로 이 쌍 혼자서는 못 잡는다는 것을 실증했다. 그
+// 거울상(OnlyA 를 도는 쪽)은 twoDocxWithUnanchoredMismatchALonger 가 잠근다.
+func twoDocxWithUnanchoredMismatchBLonger(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.docx")
@@ -715,6 +718,30 @@ func twoDocxWithUnanchoredMismatch(t *testing.T) (string, string) {
 		t.Fatalf("a 쓰기: %v", err)
 	}
 	if err := os.WriteFile(b, testutil.MinimalDocx([]string{"첫 줄", "중간B1", "중간B2", "끝 줄"}), 0o644); err != nil {
+		t.Fatalf("b 쓰기: %v", err)
+	}
+	return a, b
+}
+
+// twoDocxWithUnanchoredMismatchALonger 는 twoDocxWithUnanchoredMismatchBLonger 의
+// 거울상이다 — 앞뒤 앵커는 같지만 가운데는 a 쪽이 더 많다(a 2개, b 1개).
+//
+// align.Siblings 로 손으로 되짚으면: 앞 공통 p=1("첫 줄"), 뒤 공통 s=1("끝 줄").
+// 가운데 a[1:3]=["중간A1","중간A2"], b[1:2]=["중간B1"] 는 서로 sig 가 달라 LCS
+// 매칭이 하나도 없고, alignMiddle 이 la=2·lb=1 인 단일 'r' 구간으로 낸다.
+// align.Match 에서 m=min(la,lb)=1 이라 "중간A1"↔"중간B1" 은 위치로 짝지어지고,
+// "중간A2" 는 AStart+m..AEnd 꼬리로 남는다 — **OnlyA 루프만** 돈다. lb=1=m
+// 이라 BStart+m..BEnd 는 비어 있어 OnlyB 루프는 반복 0회로 자명하게 통과할
+// 뿐이다.
+func twoDocxWithUnanchoredMismatchALonger(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.docx")
+	b := filepath.Join(dir, "b.docx")
+	if err := os.WriteFile(a, testutil.MinimalDocx([]string{"첫 줄", "중간A1", "중간A2", "끝 줄"}), 0o644); err != nil {
+		t.Fatalf("a 쓰기: %v", err)
+	}
+	if err := os.WriteFile(b, testutil.MinimalDocx([]string{"첫 줄", "중간B1", "끝 줄"}), 0o644); err != nil {
 		t.Fatalf("b 쓰기: %v", err)
 	}
 	return a, b
@@ -777,18 +804,25 @@ func TestTmplExtractAllowFlagWritesUnrepresented(t *testing.T) {
 // 위치 짝짓기 규칙이 복제돼 있다. 갈라지는 날 같은 문서에 다른 답을 내는데,
 // 그것이 바로 이 슬라이스가 없애려던 상태다(설계 T5).
 //
-// 두 정렬 모양을 표로 돈다 — 앵커가 있어 꼬리 없는 'r'(twoDocxWithInsertion)과
-// 앵커가 없어 꼬리 있는 'r'(twoDocxWithUnanchoredMismatch). 리뷰가 첫 번째
-// 쌍만으로는 align.Match 의 'r' 꼬리 루프(OnlyA·OnlyB)가 한 번도 안 돈다는 것을
-// 변이 주입으로 실증했다 — 그 루프를 지우고 돌려도 첫 번째 쌍은 통과했다. 두
-// 번째 쌍이 그 루프를 실제로 지난다.
+// 세 케이스를 표로 돈다 — 각각이 align.Match 의 어느 분기를 실제로 지나는지가
+// 다르다(가짜로 통과만 하는 반복 0회 루프는 검증이 아니다):
+//
+//   - twoDocxWithInsertion: 'r' 이 나오지만 la=lb=1 이라 OnlyA·OnlyB 어느
+//     쪽도 안 돈다 — 앵커 있는 삽입만 잠근다.
+//   - twoDocxWithUnanchoredMismatchBLonger: la=1 < lb=2, OnlyB 루프만 돈다.
+//   - twoDocxWithUnanchoredMismatchALonger: la=2 > lb=1, OnlyA 루프만 돈다.
+//
+// 처음엔 두 번째 케이스만 있었는데, 재리뷰가 OnlyA 만 지우는 변이로 그
+// 상태에서 T5 가 안 걸린다는 것을 실증했다(OnlyB 만 도니까) — 세 번째
+// 케이스가 그 구멍을 메운다.
 func TestT5DiffAndTmplAgreeOnAlignment(t *testing.T) {
 	cases := []struct {
 		name string
 		pair func(t *testing.T) (string, string)
 	}{
 		{"앵커 있음_꼬리 없는 r", twoDocxWithInsertion},
-		{"앵커 없음_꼬리 있는 r", twoDocxWithUnanchoredMismatch},
+		{"앵커 없음_꼬리 있는 r_B가 더 김_OnlyB", twoDocxWithUnanchoredMismatchBLonger},
+		{"앵커 없음_꼬리 있는 r_A가 더 김_OnlyA", twoDocxWithUnanchoredMismatchALonger},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
