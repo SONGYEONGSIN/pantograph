@@ -22,9 +22,13 @@ I1(항등) · I2(국소성) · I3(결정성) · I4a(템플릿 가역성) · D1~D
 panto dump  <in.docx|in.pptx> [--part <선택자>]              → stdout 덤프 JSON
 panto diff  <expected> <actual> [--part <선택자>]           → stdout 차이 JSON
 panto apply <in> -p <patch.json> -o <out>
-panto tmpl extract <a> <b> [...] -o <tmpl> --schema <schema.json>
+panto tmpl extract <a> <b> [...] -o <tmpl> --schema <schema.json> [--allow-unrepresented]
 panto tmpl fill    <tmpl> --schema <schema.json> -d <data.json> -o <out>
 ```
+
+`tmpl extract`는 문서들의 **구조가 달라도** 공통부에서 템플릿을 뽑는다. 다만 템플릿은 "이 자리의 텍스트가 다르다"만 표현할 수 있고 "이 문단은 어떤 문서엔 있고 어떤 문서엔 없다"는 담지 못한다 — 그런 서브트리가 하나라도 있으면 **기본은 거절**이고, `--allow-unrepresented`를 주면 공통부만 뽑고 나머지를 스키마의 `unrepresented`에 신고한다. `ok:true`는 "이 템플릿이 입력 전부를 표현한다"를 뜻한다.
+
+`--allow-unrepresented`를 쓰기 전에 `panto diff`로 두 문서를 먼저 보는 것이 지금 할 수 있는 최선의 방어다 — 앵커 없는 구간에서는 정렬이 **내용이 아니라 위치로만** 짝짓기 때문에, `diff`가 그 구간을 `structure` 항목으로 신고한다. 스키마의 키 중 그 구간과 겹치는 것은 우연히 위치가 맞아떨어져 정상 가변 키처럼 보일 뿐일 수 있다 — 스키마 JSON만 봐서는 구별되지 않으므로, `diff`가 `structure`를 낸 구간이 있었다면 그 근처 키의 `samples`를 눈으로 확인하라.
 
 `diff`는 비대칭이다 — 첫 인자가 기대, 둘째가 실제다. **차이가 있어도 종료 코드는 0**이다(차이는 결과지 오류가 아니다). 게이트가 필요하면 `summary.total`을 본다. 본문 파트는 경로 단위로, 계획 밖 파트는 바이트로 거르고 다를 때만 스캔해서 본다 — `styles.xml`이 틀린 재현물이 "차이 없음"으로 나오지 않게 하기 위해서다.
 
@@ -54,7 +58,7 @@ Pantograph는 차이를 **경로 단위로** 측정한다. 전체 페이지 픽�
 1. **벤치마크 문서 세트 구축** — 합격 임계를 여기서 도출한다 (`panto diff`의 `summary`가 그 입력이다)
 2. **렌더 → 비교 → 보정 루프** — `setProps` 연산과 함께
 3. `{{key}}` 형식 간 병합의 의미 정의 (상위 설계에서 미해결로 남은 항목)
-4. 구조가 다른 문서 간 템플릿 추출 — LCS 정렬은 `diff`에 들어갔다(`inserted`/`deleted`). 같은 정렬기를 `tmpl.Extract`에 물리는 일이 남았다
+4. **선택적 블록** — 구조가 다른 문서 간 템플릿 추출은 공통부까지 됐다(`--allow-unrepresented`). "이 문단은 어떤 문서엔 있고 어떤 문서엔 없다"를 담으려면 `patch`에 insert/delete 연산이 필요하다
 
 ## 알려진 한계
 
@@ -68,6 +72,7 @@ Pantograph는 차이를 **경로 단위로** 측정한다. 전체 페이지 픽�
 - **"단일 바이너리"와 "렌더 충실도"는 둘 다 가질 수 없다.** 내장 렌더(빠른 루프) + LibreOffice(정밀 판정) 2단으로 나눴다
 - **`diff`는 런 분할을 "같다"고 보지 않는다.** `<w:t>안녕</w:t><w:t>하세요</w:t>`와 `<w:t>안녕하세요</w:t>`는 보이는 텍스트가 같아도 다른 것으로 나온다. LCS 정렬이 들어오면서 **어디가 다른지는 짚게** 됐지만(예전에는 그 파트를 통째로 포기했다) 텍스트 수준의 동등성은 별개 문제다 — 진짜 해결은 런 병합 정규화다 (LCS spec §9)
 - **휘발성 식별자 목록은 관찰된 것이지 완전한 목록이 아니다.** 다른 생산자·다른 버전이 우리가 모르는 식별자를 쓰면 `diff`가 그것을 진짜 차이로 보고한다. 새 픽스처가 들어올 때마다 목록이 자란다 (diff spec §8)
+- **템플릿은 항상 base의 구조를 낸다.** `--allow-unrepresented`로 뽑은 템플릿을 채우면 base의 문단 구성이 나온다 — 스키마의 `unrepresented`가 무엇이 빠지는지 말한다 (tmpl 정렬 spec §8)
 
 ## 계보
 

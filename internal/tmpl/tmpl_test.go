@@ -3,6 +3,7 @@ package tmpl_test
 import (
 	"bytes"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestExtractFindsVariableParts(t *testing.T) {
 		[]string{"청구서", "김철수", "합계"},
 	)
 
-	tp, sch, errs, err := tmpl.Extract(ps, names)
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -83,7 +84,7 @@ func TestExtractAssignsKeysInDocumentOrder(t *testing.T) {
 		[]string{"A1", "고정", "B1"},
 		[]string{"A2", "고정", "B2"},
 	)
-	_, sch, errs, err := tmpl.Extract(ps, names)
+	_, sch, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
 	}
@@ -98,16 +99,22 @@ func TestExtractAssignsKeysInDocumentOrder(t *testing.T) {
 	}
 }
 
+// TestExtractRejectsStructureMismatch 는 Task 3 이전에는 diffStructure(경로
+// 순열이 완전히 같아야 함)로 structure_mismatch 를 냈다. 이 태스크가 그 게이트를
+// 정렬로 갈아끼우면서, 문단 수가 다른 이 픽스처는 이제 정렬 자체는 성공하고
+// 대신 표현 못 하는 서브트리가 생겨 unrepresented_structure 로 거절된다(플래그가
+// false 이므로) — 거절된다는 결론은 같고 사유만 바뀐다. T2 가 이 새 경로를
+// 전담해서 시험하므로 이 테스트는 사유만 새 것으로 갱신한다.
 func TestExtractRejectsStructureMismatch(t *testing.T) {
 	ps, names := pkgs(t,
 		[]string{"A", "B", "C"},
 		[]string{"A", "B"}, // 문단 수가 다르다
 	)
-	_, _, errs, err := tmpl.Extract(ps, names)
+	_, _, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	if len(errs) != 1 || errs[0].Reason != "structure_mismatch" {
+	if len(errs) != 1 || errs[0].Reason != "unrepresented_structure" {
 		t.Fatalf("구조 불일치가 거절되지 않았다: %+v", errs)
 	}
 	if errs[0].Path == "" {
@@ -126,7 +133,7 @@ func TestExtractRejectsPartSetMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "deck.pptx"})
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "deck.pptx"}, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -156,7 +163,7 @@ func TestExtractIgnoresVolatileAttrs(t *testing.T) {
 		t.Fatalf("Replace: %v", err)
 	}
 
-	_, sch, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	_, sch, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -187,7 +194,7 @@ func TestExtractRejectsNonTextDiff(t *testing.T) {
 		t.Fatalf("Replace: %v", err)
 	}
 
-	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -219,7 +226,7 @@ func TestExtractRejectsInstrTextDiff(t *testing.T) {
 	a := fieldDoc(t, "MERGEFIELD Name", "홍길동")
 	b := fieldDoc(t, "MERGEFIELD Company", "김철수")
 
-	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -237,7 +244,7 @@ func TestExtractAcceptsIdenticalInstrText(t *testing.T) {
 	a := fieldDoc(t, "MERGEFIELD Name", "홍길동")
 	b := fieldDoc(t, "MERGEFIELD Name", "김철수")
 
-	_, sch, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	_, sch, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("같은 필드 명령인데 거절됐다: err=%v errs=%+v", err, errs)
 	}
@@ -264,7 +271,7 @@ func TestExtractRejectsIndentationDiff(t *testing.T) {
 		t.Fatalf("OpenBytes: %v", err)
 	}
 
-	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -283,7 +290,7 @@ func TestNontextDiffDetailNamesNoFormatElement(t *testing.T) {
 	a := fieldDoc(t, "MERGEFIELD Name", "홍길동")
 	b := fieldDoc(t, "MERGEFIELD Company", "김철수")
 
-	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"})
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -303,7 +310,7 @@ func TestNontextDiffDetailNamesNoFormatElement(t *testing.T) {
 
 func TestExtractRequiresTwoDocuments(t *testing.T) {
 	ps, names := pkgs(t, []string{"A"})
-	_, _, errs, err := tmpl.Extract(ps, names)
+	_, _, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -320,7 +327,7 @@ func TestTemplateReversalBase(t *testing.T) {
 	}
 	ps, names := pkgs(t, forms...)
 
-	tp, sch, errs, err := tmpl.Extract(ps, names)
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
 	}
@@ -378,7 +385,7 @@ func TestTemplateReversalReal(t *testing.T) {
 		names[i] = filepath.Base(path)
 	}
 
-	tp, sch, errs, err := tmpl.Extract(ps, names)
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
 	}
@@ -428,7 +435,7 @@ func TestPptxTemplateReversalReal(t *testing.T) {
 		names = append(names, n)
 	}
 
-	tp, sch, errs, err := tmpl.Extract(ps, names)
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
 	}
@@ -478,7 +485,7 @@ func TestTemplateReversalOthersTextLevel(t *testing.T) {
 		[]string{"청구서", "김철수", "880,000"},
 	)
 
-	tp, sch, errs, err := tmpl.Extract(ps, names)
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
 	}
@@ -509,7 +516,7 @@ func TestTemplateReversalOthersTextLevel(t *testing.T) {
 
 func TestFillRejectsMissingKey(t *testing.T) {
 	ps, names := pkgs(t, []string{"고정", "A"}, []string{"고정", "B"})
-	tp, sch, errs, err := tmpl.Extract(ps, names)
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
 	}
@@ -524,7 +531,7 @@ func TestFillRejectsMissingKey(t *testing.T) {
 
 func TestFillRejectsTemplateDrift(t *testing.T) {
 	ps, names := pkgs(t, []string{"고정", "A"}, []string{"고정", "B"})
-	tp, sch, errs, err := tmpl.Extract(ps, names)
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
 	}
@@ -544,6 +551,185 @@ func TestFillRejectsTemplateDrift(t *testing.T) {
 	}
 	if len(fe) != 1 || fe[0].Reason != "template_drift" {
 		t.Fatalf("템플릿 드리프트가 거절되지 않았다: %+v", fe)
+	}
+}
+
+// TestT2StructuralDifferenceIsRejectedByDefault 는 구조가 다른 문서를 플래그
+// 없이 주면 거절하는지 본다.
+//
+// 정렬이 들어오면 Extract 가 구조 차이에도 **성공**하게 되는데, 그 성공은
+// "이 템플릿은 입력 중 일부를 재현하지 못한다"는 단서가 붙은 성공이다.
+// 단서는 무시할 수 있지만 실패는 무시할 수 없다 — 그래서 기본은 거절이다
+// (설계 §3).
+func TestT2StructuralDifferenceIsRejectedByDefault(t *testing.T) {
+	a := testutil.MinimalDocx([]string{"첫 줄", "셋째 줄"})
+	b := testutil.MinimalDocx([]string{"첫 줄", "새로 낀 줄", "셋째 줄"})
+	pa, err := opc.OpenBytes(a)
+	if err != nil {
+		t.Fatalf("OpenBytes a: %v", err)
+	}
+	pb, err := opc.OpenBytes(b)
+	if err != nil {
+		t.Fatalf("OpenBytes b: %v", err)
+	}
+	_, _, errs, err := tmpl.Extract([]*opc.Package{pa, pb}, []string{"a.docx", "b.docx"}, false)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("거절 항목이 %d개 (기대 1): %+v", len(errs), errs)
+	}
+	if errs[0].Reason != "unrepresented_structure" {
+		t.Fatalf("reason=%q (기대 unrepresented_structure)", errs[0].Reason)
+	}
+	if errs[0].Detail == "" {
+		t.Fatal("detail 이 비었다 — 무엇을 표현 못 하는지 말해야 한다")
+	}
+}
+
+// TestT3AllowFlagExtractsCommonPartAndReportsRest 는 플래그를 주면 공통부에서
+// 키를 뽑고 매칭 안 된 서브트리를 빠짐없이 신고하는지 본다.
+//
+// **샘플 페어링에 대한 주** — 애초 이 테스트는 "셋째 줄"↔"셋째 줄!" 로 짝지어질
+// 것으로 짜였지만, 실행해보면 실제로는 "셋째 줄"↔"새로 낀 줄" 로 짝지어지고
+// "셋째 줄!" 문단이 unrepresented 로 빠진다. align.Match(건드릴 수 없는 패키지)
+// 의 alignMiddle 이 공통 접두사(p[1] "첫 줄") 를 잘라낸 뒤 남은 구간에서 정확히
+// 같은 서브트리 해시를 못 찾으면("셋째 줄" 은 "새로 낀 줄"·"셋째 줄!" 어느 쪽과도
+// 해시가 다르다) 텍스트 유사도가 아니라 **위치(앞에서부터)** 로 짝짓기 때문이다
+// (align.go Siblings/alignMiddle 의 'r' 폴백 — LCS 매치가 하나도 없으면 gap() 이
+// 남은 구간 전체를 단일 'r' 오퍼레이션으로 묶고, Match.walk 가 그 안에서
+// min(len(a),len(b)) 개를 인덱스 순서로 짝짓는다). 아래 기대값은 이 실측을
+// 반영한다 — 문서 삽입 뒤 정렬이 "직관적으로 맞는" 문단을 찾아준다는 보장은
+// 없다는 뜻이다.
+func TestT3AllowFlagExtractsCommonPartAndReportsRest(t *testing.T) {
+	// base 에 2문단, 다른 문서에 3문단(가운데 하나 삽입) + 마지막 문단 텍스트 변경.
+	// 공통부의 가변 키는 "셋째 줄"↔"새로 낀 줄" 하나여야 하고(위 주 참조),
+	// 매칭 안 된 서브트리는 b 에만 있는 "셋째 줄!" 문단 하나여야 한다.
+	a := testutil.MinimalDocx([]string{"첫 줄", "셋째 줄"})
+	b := testutil.MinimalDocx([]string{"첫 줄", "새로 낀 줄", "셋째 줄!"})
+	pa, err := opc.OpenBytes(a)
+	if err != nil {
+		t.Fatalf("OpenBytes a: %v", err)
+	}
+	pb, err := opc.OpenBytes(b)
+	if err != nil {
+		t.Fatalf("OpenBytes b: %v", err)
+	}
+	_, sch, errs, err := tmpl.Extract([]*opc.Package{pa, pb}, []string{"a.docx", "b.docx"}, true)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) > 0 {
+		t.Fatalf("플래그를 줬는데 거절됐다: %+v", errs)
+	}
+	if len(sch.Unrepresented) != 1 {
+		t.Fatalf("unrepresented 가 %d건 (기대 1 — b 에만 있는 문단 하나): %+v",
+			len(sch.Unrepresented), sch.Unrepresented)
+	}
+	u := sch.Unrepresented[0]
+	if u.Doc != "b.docx" {
+		t.Errorf("doc=%q (기대 b.docx)", u.Doc)
+	}
+	if u.Part != "word/document.xml" {
+		t.Errorf("part=%q", u.Part)
+	}
+	if u.Nodes == 0 {
+		t.Error("nodes 가 0 이다 — 서브트리 무게를 말해야 한다")
+	}
+	// 공통부에서 키가 나와야 한다 — "셋째 줄" 이 위치 정렬로 "새로 낀 줄" 과 짝지어진
+	// 자리(테스트 위 주 참조).
+	if len(sch.Keys) != 1 {
+		t.Fatalf("키가 %d개 (기대 1): %+v", len(sch.Keys), sch.Keys)
+	}
+	if sch.Keys[0].Samples[0] != "셋째 줄" || sch.Keys[0].Samples[1] != "새로 낀 줄" {
+		t.Fatalf("샘플이 %v (기대 [셋째 줄 새로 낀 줄])", sch.Keys[0].Samples)
+	}
+}
+
+// TestExtractReportsCappedAlignmentAsUnrepresented 는 정렬이 상한(align.MaxCells,
+// 2000×2000)을 넘어 자식 정렬을 포기하고 위치로만 짝지은 경우, 그 밑에서 나온
+// 값을 조용히 키로 신뢰하지 않는지 본다.
+//
+// 형제 2001개씩을 접두사가 겹치지 않게 만들어("A0".."A2000" 대 "B0".."B2000")
+// 앞뒤 공통 잘라내기가 전혀 안 먹게 하면서도, 개수는 똑같이(2001=2001) 맞춰
+// 위치 짝짓기 자체는 완전히 맞아떨어지게 한다 — OnlyA/OnlyB 는 하나도 안 나오게
+// 해서 Capped 고유의 신호만 격리해서 본다.
+func TestExtractReportsCappedAlignmentAsUnrepresented(t *testing.T) {
+	const n = 2001 // 2001 × 2001 > align.MaxCells(4,000,000)
+	// MinimalDocx 는 문단마다 다른 w14:paraId 를 한 글자('1'+i)로 채우는데, i 가
+	// 커지면 그 한 바이트가 넘쳐(overflow) 임의 바이트(예: '<')를 속성값 안에
+	// 그대로 흘려 XML 을 깨뜨린다 — 이 태스크와 무관한 testutil 의 기존 한계라
+	// 건드리지 않고, paraId 가 없는 DocxWithBody 로 우회한다.
+	mk := func(prefix string) []byte {
+		var body strings.Builder
+		for i := 0; i < n; i++ {
+			body.WriteString(`<w:p><w:r><w:t xml:space="preserve">`)
+			body.WriteString(prefix)
+			body.WriteString(strconv.Itoa(i))
+			body.WriteString(`</w:t></w:r></w:p>`)
+		}
+		return testutil.DocxWithBody(body.String())
+	}
+	pa, err := opc.OpenBytes(mk("A"))
+	if err != nil {
+		t.Fatalf("OpenBytes a: %v", err)
+	}
+	pb, err := opc.OpenBytes(mk("B"))
+	if err != nil {
+		t.Fatalf("OpenBytes b: %v", err)
+	}
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{pa, pb}, []string{"a.docx", "b.docx"}, false)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unrepresented_structure" {
+		t.Fatalf("상한 초과로 위치 짝짓기된 정렬이 거절되지 않았다: %+v", errs)
+	}
+
+	_, sch, errs, err := tmpl.Extract([]*opc.Package{pa, pb}, []string{"a.docx", "b.docx"}, true)
+	if err != nil {
+		t.Fatalf("Extract(allow): %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("플래그를 줬는데 거절됐다: %+v", errs)
+	}
+	if len(sch.Unrepresented) == 0 {
+		t.Fatal("Capped 가 unrepresented 로 신고되지 않았다")
+	}
+}
+
+// TestExtractMultiDocumentKeysMatchDocumentCount 는 문서 3벌에서 뽑은 키가
+// 모두 문서 수만큼의 샘플을 갖고 빈 샘플이 없는지 본다 — 정확한 키 개수는
+// 못 박지 않는다(정렬 결과를 실행해보지 않고는 알 수 없다). base 의 셋째
+// 문단은 doc c 에서만 통째로 빠져 있어, base-vs-b 에서는 매칭되고 base-vs-c
+// 에서는 매칭되지 않는 노드가 생긴다 — "모든 문서에서 매칭된 노드만 키
+// 후보"(설계 §5 규칙 1) 를 3벌 이상에서도 지키는지가 이 테스트의 핵심이다.
+func TestExtractMultiDocumentKeysMatchDocumentCount(t *testing.T) {
+	ps, names := pkgs(t,
+		[]string{"머리글", "가운데", "꼬리A"},
+		[]string{"머리글", "가운데-B", "꼬리B"},
+		[]string{"머리글", "꼬리C"}, // 가운데 문단이 통째로 빠졌다
+	)
+	_, sch, errs, err := tmpl.Extract(ps, names, true)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("플래그를 줬는데 거절됐다: %+v", errs)
+	}
+	for _, k := range sch.Keys {
+		if len(k.Samples) != len(ps) {
+			t.Fatalf("키 %s 의 샘플이 %d개 (기대 문서 수 %d개): %+v", k.Key, len(k.Samples), len(ps), k)
+		}
+		for i, s := range k.Samples {
+			if s == "" {
+				t.Fatalf("키 %s 의 샘플[%d] 이 비었다: %+v", k.Key, i, k)
+			}
+		}
+	}
+	if len(sch.Unrepresented) == 0 {
+		t.Fatal("가운데 문단이 통째로 빠졌는데 unrepresented 가 하나도 없다")
 	}
 }
 
@@ -573,4 +759,99 @@ func textsOf(t *testing.T, p *opc.Package) []string {
 		}
 	}
 	return out
+}
+
+// zeroNodeDoc 는 word/document.xml 이 요소를 하나도 안 가진 docx 패키지를
+// 만든다. xmlscan.Scan 은 시작 요소가 없는 XML(주석·선언만)도 에러 없이 노드
+// 0개 트리를 낸다 — align.BuildTree 가 nil 을 돌려주는 경계다. Package.Replace
+// 를 쓰는 이유는 DocxWithBody 문서에 적힌 대로다: Replace 는 Part() 로 읽는
+// 이후 스캔에는 반영되지만 Source()(원본 zip 바이트)는 그대로 둔다.
+func zeroNodeDoc(t *testing.T) *opc.Package {
+	t.Helper()
+	p, err := opc.OpenBytes(testutil.MinimalDocx([]string{"아무거나"}))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	if err := p.Replace("word/document.xml",
+		[]byte(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><!-- empty -->`)); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	return p
+}
+
+// TestExtractDocZeroNodeNoPanic 은 base 가 아닌 문서의 파트가 0노드일 때
+// 패닉하지 않는지 본다.
+//
+// 회귀: extract.go 의 파트 루프는 doc[i] 의 root := align.BuildTree(tr) 뒤
+// align.Sign(root) 를 nil 가드 없이 불렀다. BuildTree 는 노드 0개 트리에서
+// nil 을 돌려주므로(BuildTree 문서 참조) Sign(nil) 이 n.Type 필드 접근에서
+// nil 포인터 역참조로 패닉한다 — CLI 바이너리로 확정 재현됐다
+// (panic: ... align.Sign ... internal/tmpl.Extract ... extract.go:81).
+//
+// 고친 뒤에는: base 서브트리 전체가 그 문서에서만 매칭 안 된 것으로
+// 잡혀(res.OnlyA) unrepresented 에 실리고, 기본은 거절한다 — 패닉 대신
+// 신고다.
+func TestExtractDocZeroNodeNoPanic(t *testing.T) {
+	a, err := opc.OpenBytes(testutil.MinimalDocx([]string{"고정"}))
+	if err != nil {
+		t.Fatalf("OpenBytes a: %v", err)
+	}
+	b := zeroNodeDoc(t)
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unrepresented_structure" {
+		t.Fatalf("0노드 파트가 있는 문서가 거절되지 않았다: %+v", errs)
+	}
+}
+
+// TestExtractBaseZeroNodeReportsUnrepresented 는 base 쪽 파트가 0노드이고
+// 다른 문서의 같은 파트에는 실제 내용이 있을 때, 그 내용이 **조용히 사라지지
+// 않고** unrepresented 로 신고되는지 본다.
+//
+// 회귀: 원래 코드는 baseRoot == nil 이면 그 파트를 통째로 continue 해
+// 건너뛰었다 — doc b 의 문단이 unrepresented 를 포함해 어떤 신호에도 안
+// 걸리고 사라져 Extract 가 {"ok":true, "unrepresented":[]} 를 낸다. 이것은
+// PR #3 이 고친 "ok:true 를 내면서 데이터를 지운다" 패턴의 재발이고, 기본
+// 거절 게이트(len(unrep) > 0 && !allowUnrepresented)를 완전히 우회한다.
+// internal/diff 의 compareTrees 는 이 경계를 이미 안전하게 다루는데(한쪽
+// 파트에 노드가 없으면 structure 항목을 낸다) tmpl 쪽만 그 가드를
+// 이식받지 못했었다.
+func TestExtractBaseZeroNodeReportsUnrepresented(t *testing.T) {
+	a := zeroNodeDoc(t)
+	b, err := opc.OpenBytes(testutil.MinimalDocx([]string{"실제 문단"}))
+	if err != nil {
+		t.Fatalf("OpenBytes b: %v", err)
+	}
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unrepresented_structure" {
+		t.Fatalf("base 가 0노드인데 기본 거절이 작동하지 않았다: %+v", errs)
+	}
+
+	_, sch, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, true)
+	if err != nil {
+		t.Fatalf("Extract(allow): %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("플래그를 줬는데 거절됐다: %+v", errs)
+	}
+	if len(sch.Unrepresented) != 1 {
+		t.Fatalf("unrepresented 가 %d건 (기대 1 — b 의 내용 전체): %+v", len(sch.Unrepresented), sch.Unrepresented)
+	}
+	u := sch.Unrepresented[0]
+	if u.Doc != "b.docx" {
+		t.Errorf("doc=%q (기대 b.docx)", u.Doc)
+	}
+	if u.Part != "word/document.xml" {
+		t.Errorf("part=%q", u.Part)
+	}
+	if u.Nodes == 0 {
+		t.Error("nodes 가 0 이다 — b 의 내용이 사라진 무게를 말해야 한다")
+	}
 }

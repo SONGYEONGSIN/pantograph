@@ -1,4 +1,4 @@
-package diff
+package align
 
 import (
 	"path/filepath"
@@ -41,20 +41,20 @@ func TestBuildTreeCoversEveryNodeExactlyOnce(t *testing.T) {
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			tr := scanReal(t, c.file, c.part)
-			root := buildTree(tr)
+			root := BuildTree(tr)
 			if root == nil {
 				t.Fatal("루트가 nil 이다")
 			}
-			if root.size != len(tr.Nodes) {
-				t.Fatalf("서브트리 노드 수 %d, 실제 %d — 빠뜨렸거나 겹쳤다", root.size, len(tr.Nodes))
+			if root.Size != len(tr.Nodes) {
+				t.Fatalf("서브트리 노드 수 %d, 실제 %d — 빠뜨렸거나 겹쳤다", root.Size, len(tr.Nodes))
 			}
 			if root.Path != tr.Nodes[0].Path {
 				t.Fatalf("루트가 %q (기대 %q)", root.Path, tr.Nodes[0].Path)
 			}
 			// 자식의 Span 은 부모 안에 들어 있어야 한다.
-			var check func(n *node)
-			check = func(n *node) {
-				for _, k := range n.kids {
+			var check func(n *Node)
+			check = func(n *Node) {
+				for _, k := range n.Kids {
 					if k.Span.Start < n.Span.Start || k.Span.End > n.Span.End {
 						t.Fatalf("%s 의 자식 %s 가 부모 Span 밖이다", n.Path, k.Path)
 					}
@@ -70,7 +70,7 @@ func TestBuildTreeCoversEveryNodeExactlyOnce(t *testing.T) {
 // 본다. **이 슬라이스의 급소다** — creationId 가 해시에 들어가면 pptx
 // 레이아웃은 문서마다 값이 달라 영영 매칭되지 않고 정렬이 통째로 무너진다.
 func TestSignIgnoresVolatileAttrs(t *testing.T) {
-	mk := func(creationVal, realVal string) *node {
+	mk := func(creationVal, realVal string) *Node {
 		tr := &xmlscan.Tree{Nodes: []xmlscan.Node{
 			{Path: "sp", Type: "sp", Span: xmlscan.Span{Start: 0, End: 100}},
 			{Path: "sp/creationId[1]", Type: "creationId", Span: xmlscan.Span{Start: 10, End: 40},
@@ -78,8 +78,8 @@ func TestSignIgnoresVolatileAttrs(t *testing.T) {
 			{Path: "sp/sz[1]", Type: "sz", Span: xmlscan.Span{Start: 40, End: 90},
 				Attrs: []xmlscan.Attr{{Name: "val", Value: realVal}}},
 		}}
-		n := buildTree(tr)
-		sign(n)
+		n := BuildTree(tr)
+		Sign(n)
 		return n
 	}
 	a := mk("111", "24")
@@ -96,7 +96,7 @@ func TestSignIgnoresVolatileAttrs(t *testing.T) {
 // TestSignDistinguishesTextAndShape 는 해시가 텍스트와 모양을 모두 반영하는지
 // 본다. 둘 중 하나라도 빠지면 서로 다른 서브트리가 같다고 매칭된다.
 func TestSignDistinguishesTextAndShape(t *testing.T) {
-	mk := func(text string, extraKid bool) *node {
+	mk := func(text string, extraKid bool) *Node {
 		nodes := []xmlscan.Node{
 			{Path: "p", Type: "p", Span: xmlscan.Span{Start: 0, End: 100}},
 			{Path: "p/t[1]", Type: "t", Text: text, Span: xmlscan.Span{Start: 10, End: 50}},
@@ -105,8 +105,8 @@ func TestSignDistinguishesTextAndShape(t *testing.T) {
 			nodes = append(nodes, xmlscan.Node{Path: "p/t[2]", Type: "t", Text: "덤",
 				Span: xmlscan.Span{Start: 50, End: 90}})
 		}
-		n := buildTree(&xmlscan.Tree{Nodes: nodes})
-		sign(n)
+		n := BuildTree(&xmlscan.Tree{Nodes: nodes})
+		Sign(n)
 		return n
 	}
 	if mk("가", false).sig == mk("나", false).sig {
@@ -122,23 +122,23 @@ func TestSignDistinguishesTextAndShape(t *testing.T) {
 
 // mkSigs 는 주어진 해시 문자열들을 가진 형제 목록을 만든다.
 // 정렬은 sig 만 보므로 나머지 필드는 비워도 된다.
-func mkSigs(sigs ...string) []*node {
-	out := make([]*node, len(sigs))
+func mkSigs(sigs ...string) []*Node {
+	out := make([]*Node, len(sigs))
 	for i, s := range sigs {
-		out[i] = &node{sig: s, size: 1}
+		out[i] = &Node{sig: s, Size: 1}
 	}
 	return out
 }
 
 // opsString 은 구간 목록을 읽기 쉬운 한 줄로 만든다. 기대값과 대조하기 위한 것이다.
-func opsString(ops []op) string {
+func opsString(ops []Op) string {
 	s := ""
 	for _, o := range ops {
 		if s != "" {
 			s += " "
 		}
-		s += string(o.tag) + "a" + itoa(o.aStart) + ":" + itoa(o.aEnd) +
-			"b" + itoa(o.bStart) + ":" + itoa(o.bEnd)
+		s += string(o.Tag) + "a" + itoa(o.AStart) + ":" + itoa(o.AEnd) +
+			"b" + itoa(o.BStart) + ":" + itoa(o.BEnd)
 	}
 	return s
 }
@@ -165,7 +165,7 @@ func TestAlignSiblings(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ops, capped := alignSiblings(mkSigs(c.a...), mkSigs(c.b...))
+			ops, capped := Siblings(mkSigs(c.a...), mkSigs(c.b...))
 			if capped {
 				t.Fatal("상한에 걸릴 입력이 아닌데 capped 다")
 			}
@@ -192,7 +192,7 @@ func TestAlignSiblingsCommonPrefixSuffixIsFree(t *testing.T) {
 		a = append(a, "post"+itoa(i))
 		b = append(b, "post"+itoa(i))
 	}
-	ops, capped := alignSiblings(mkSigs(a...), mkSigs(b...))
+	ops, capped := Siblings(mkSigs(a...), mkSigs(b...))
 	if capped {
 		t.Fatal("앞뒤 공통을 잘라냈으면 상한에 안 걸린다 — 잘라내지 않았다")
 	}
@@ -214,7 +214,7 @@ func TestAlignSiblingsCommonPrefixSuffixIsFree(t *testing.T) {
 // 비지 않은 채로 alignMiddle 의 LCS 갈래로 들어가, Q 매칭 앞뒤로 gap() 이
 // 두 번(N 앞에서 한 번, R 뒤에서 한 번) 순수 삽입 분기를 탄다.
 func TestAlignSiblingsMidListPureInsertion(t *testing.T) {
-	ops, capped := alignSiblings(mkSigs("P", "Q"), mkSigs("P", "N", "Q", "R"))
+	ops, capped := Siblings(mkSigs("P", "Q"), mkSigs("P", "N", "Q", "R"))
 	if capped {
 		t.Fatal("상한에 걸릴 입력이 아닌데 capped 다")
 	}
@@ -233,11 +233,55 @@ func TestAlignSiblingsCapFallsBackAndSaysSo(t *testing.T) {
 		a = append(a, "A"+itoa(i))
 		b = append(b, "B"+itoa(i)) // 하나도 안 겹친다 — 앞뒤 잘라내기가 안 먹는다
 	}
-	ops, capped := alignSiblings(mkSigs(a...), mkSigs(b...))
+	ops, capped := Siblings(mkSigs(a...), mkSigs(b...))
 	if !capped {
-		t.Fatalf("%d × %d 는 상한(%d)을 넘는데 capped 가 아니다", n, n, maxCells)
+		t.Fatalf("%d × %d 는 상한(%d)을 넘는데 capped 가 아니다", n, n, MaxCells)
 	}
-	if len(ops) != 1 || ops[0].tag != 'r' {
+	if len(ops) != 1 || ops[0].Tag != 'r' {
 		t.Fatalf("상한 초과는 위치 짝짓기용 r 구간 하나여야 한다: %s", opsString(ops))
+	}
+}
+
+// TestAttrMapKeepsNamespaceCollidingLocalNames 는 최종 리뷰 Critical 지적을
+// 잠근다 — AttrMap 이 로컬명만으로 색인해 <p:sldId id="256" r:id="rId2"/> 같은
+// 마크업에서 속성이 조용히 사라지는 문제.
+//
+// xmlscan.Attr 은 로컬명만 Name 에 담고 접두사는 버린다(scan.go 주석). 그래서
+// "id"(네임스페이스 없음, 슬라이드 정체성)와 "r:id"(relationships 네임스페이스,
+// 관계 참조)가 스캔 후에는 둘 다 Name=="id"로 남는다. AttrMap 이 로컬명만으로
+// 맵을 채우면 원문 순서상 뒤에 오는 것이 앞을 덮어써 슬라이드 정체성 id가
+// 통째로 맵에서 빠진다.
+//
+// 이 테스트는 옮기기 전엔 diff.compareAttrs 를 통해 간접으로(비교 결과 항목
+// 수로) 이 결함을 확인했다. attrMap 이 align 패키지로 옮겨가면서 compareAttrs 는
+// diff 에 그대로 남았으므로(이름 대응표에 없다 — 이 함수는 옮기지 않는다),
+// align 패키지 안에서는 compareAttrs 를 부를 수 없다 — align 은 diff 를
+// import 하면 안 되기 때문이다(패키지 doc 주석 참고). 그래서 AttrMap 을 직접
+// 불러 맵 내용으로 같은 결함을 확인한다.
+//
+// 수정 전(로컬명 키)에는 두 Attrs 슬라이스 모두 map[string]string{"id": "rId2"}로
+// 좁혀졌다(원문 순서상 r:id 가 나중이라 그 값이 남는다) — 슬라이드 정체성 id
+// 값(256)이 통째로 사라졌다.
+func TestAttrMapKeepsNamespaceCollidingLocalNames(t *testing.T) {
+	const relNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+	x := xmlscan.Node{
+		Path: "presentation/sldIdLst[1]/sldId[1]",
+		Type: "sldId",
+		Attrs: []xmlscan.Attr{
+			{Name: "id", Value: "256"},             // 슬라이드 정체성 (네임스페이스 없음)
+			{Name: "id", NS: relNS, Value: "rId2"}, // r:id — 관계 참조
+		},
+	}
+
+	m := AttrMap(x)
+	if len(m) != 2 {
+		t.Fatalf("속성이 %d개다 (기대 2개 — 네임스페이스가 다른 두 id 가 서로를 덮어쓰면 안 된다): %+v", len(m), m)
+	}
+	if got, ok := m[[2]string{"", "id"}]; !ok || got != "256" {
+		t.Fatalf("슬라이드 정체성 id=%q ok=%v (기대 %q)", got, ok, "256")
+	}
+	if got, ok := m[[2]string{relNS, "id"}]; !ok || got != "rId2" {
+		t.Fatalf("r:id=%q ok=%v (기대 %q)", got, ok, "rId2")
 	}
 }
