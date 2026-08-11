@@ -63,11 +63,15 @@ func Extract(pkgs []*opc.Package, names []string, allowUnrepresented bool) (*opc
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("%s: %w", names[0], err)
 		}
+		// baseRoot 가 nil(파트에 노드가 하나도 없음)이어도 그냥 넘어가지 않는다
+		// — 그러면 다른 문서의 내용이 unrepresented 에도 안 걸리고 조용히
+		// 사라진다(회귀, 최종 리뷰 Critical). align.Match(nil, root) 는 root
+		// 전체를 OnlyB 로 돌려주므로 아래 루프가 자연히 그 문서의 내용을
+		// 신고하게 된다.
 		baseRoot := align.BuildTree(baseTree)
-		if baseRoot == nil {
-			continue // 노드가 없는 파트 — 볼 것이 없다
+		if baseRoot != nil {
+			align.Sign(baseRoot)
 		}
-		align.Sign(baseRoot)
 
 		// 문서마다 base 와 짝짓는다. Extract 는 base 대 각 문서를 따로 보므로
 		// 어떤 노드는 doc1 과는 매칭되고 doc2 와는 안 될 수 있다.
@@ -77,8 +81,14 @@ func Extract(pkgs []*opc.Package, names []string, allowUnrepresented bool) (*opc
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("%s: %w", names[i], err)
 			}
+			// root 도 nil 일 수 있다(그 문서의 이 파트에 노드가 없음) — 여기서
+			// nil 가드 없이 Sign 을 부르면 패닉한다(회귀, 최종 리뷰 Critical,
+			// CLI 바이너리로 확정 재현됨). align.Match 는 이미 a==nil||b==nil
+			// 을 안전하게 처리하므로 Sign 만 건너뛰면 된다.
 			root := align.BuildTree(tr)
-			align.Sign(root)
+			if root != nil {
+				align.Sign(root)
+			}
 
 			res := align.Match(baseRoot, root)
 			m := make(map[*align.Node]*align.Node, len(res.Pairs))
@@ -158,8 +168,12 @@ func Extract(pkgs []*opc.Package, names []string, allowUnrepresented bool) (*opc
 			}
 			return nil
 		}
-		if e := walk(baseRoot); e != nil {
-			return nil, nil, []patch.Error{*e}, nil
+		// baseRoot 가 nil 이면 후보 자체가 없다 — 위 doc 루프가 이미 그
+		// 문서들의 내용을 OnlyB 로 신고했으니 여기서는 더 할 일이 없다.
+		if baseRoot != nil {
+			if e := walk(baseRoot); e != nil {
+				return nil, nil, []patch.Error{*e}, nil
+			}
 		}
 	}
 
