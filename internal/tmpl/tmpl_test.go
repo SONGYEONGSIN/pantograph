@@ -656,10 +656,8 @@ func TestT3AllowFlagExtractsCommonPartAndReportsRest(t *testing.T) {
 // 해서 Capped 고유의 신호만 격리해서 본다.
 func TestExtractReportsCappedAlignmentAsUnrepresented(t *testing.T) {
 	const n = 2001 // 2001 × 2001 > align.MaxCells(4,000,000)
-	// MinimalDocx 는 문단마다 다른 w14:paraId 를 한 글자('1'+i)로 채우는데, i 가
-	// 커지면 그 한 바이트가 넘쳐(overflow) 임의 바이트(예: '<')를 속성값 안에
-	// 그대로 흘려 XML 을 깨뜨린다 — 이 태스크와 무관한 testutil 의 기존 한계라
-	// 건드리지 않고, paraId 가 없는 DocxWithBody 로 우회한다.
+	// paraId 없이 DocxWithBody 로 만든다 — 여기서 보려는 건 Capped 신호뿐이라
+	// 문단마다 다른 휘발성 ID 는 노이즈일 뿐이다.
 	mk := func(prefix string) []byte {
 		var body strings.Builder
 		for i := 0; i < n; i++ {
