@@ -760,3 +760,98 @@ func textsOf(t *testing.T, p *opc.Package) []string {
 	}
 	return out
 }
+
+// zeroNodeDoc 는 word/document.xml 이 요소를 하나도 안 가진 docx 패키지를
+// 만든다. xmlscan.Scan 은 시작 요소가 없는 XML(주석·선언만)도 에러 없이 노드
+// 0개 트리를 낸다 — align.BuildTree 가 nil 을 돌려주는 경계다. Package.Replace
+// 를 쓰는 이유는 DocxWithBody 문서에 적힌 대로다: Replace 는 Part() 로 읽는
+// 이후 스캔에는 반영되지만 Source()(원본 zip 바이트)는 그대로 둔다.
+func zeroNodeDoc(t *testing.T) *opc.Package {
+	t.Helper()
+	p, err := opc.OpenBytes(testutil.MinimalDocx([]string{"아무거나"}))
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	if err := p.Replace("word/document.xml",
+		[]byte(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><!-- empty -->`)); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	return p
+}
+
+// TestExtractDocZeroNodeNoPanic 은 base 가 아닌 문서의 파트가 0노드일 때
+// 패닉하지 않는지 본다.
+//
+// 회귀: extract.go 의 파트 루프는 doc[i] 의 root := align.BuildTree(tr) 뒤
+// align.Sign(root) 를 nil 가드 없이 불렀다. BuildTree 는 노드 0개 트리에서
+// nil 을 돌려주므로(BuildTree 문서 참조) Sign(nil) 이 n.Type 필드 접근에서
+// nil 포인터 역참조로 패닉한다 — CLI 바이너리로 확정 재현됐다
+// (panic: ... align.Sign ... internal/tmpl.Extract ... extract.go:81).
+//
+// 고친 뒤에는: base 서브트리 전체가 그 문서에서만 매칭 안 된 것으로
+// 잡혀(res.OnlyA) unrepresented 에 실리고, 기본은 거절한다 — 패닉 대신
+// 신고다.
+func TestExtractDocZeroNodeNoPanic(t *testing.T) {
+	a, err := opc.OpenBytes(testutil.MinimalDocx([]string{"고정"}))
+	if err != nil {
+		t.Fatalf("OpenBytes a: %v", err)
+	}
+	b := zeroNodeDoc(t)
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unrepresented_structure" {
+		t.Fatalf("0노드 파트가 있는 문서가 거절되지 않았다: %+v", errs)
+	}
+}
+
+// TestExtractBaseZeroNodeReportsUnrepresented 는 base 쪽 파트가 0노드이고
+// 다른 문서의 같은 파트에는 실제 내용이 있을 때, 그 내용이 **조용히 사라지지
+// 않고** unrepresented 로 신고되는지 본다.
+//
+// 회귀: 원래 코드는 baseRoot == nil 이면 그 파트를 통째로 continue 해
+// 건너뛰었다 — doc b 의 문단이 unrepresented 를 포함해 어떤 신호에도 안
+// 걸리고 사라져 Extract 가 {"ok":true, "unrepresented":[]} 를 낸다. 이것은
+// PR #3 이 고친 "ok:true 를 내면서 데이터를 지운다" 패턴의 재발이고, 기본
+// 거절 게이트(len(unrep) > 0 && !allowUnrepresented)를 완전히 우회한다.
+// internal/diff 의 compareTrees 는 이 경계를 이미 안전하게 다루는데(한쪽
+// 파트에 노드가 없으면 structure 항목을 낸다) tmpl 쪽만 그 가드를
+// 이식받지 못했었다.
+func TestExtractBaseZeroNodeReportsUnrepresented(t *testing.T) {
+	a := zeroNodeDoc(t)
+	b, err := opc.OpenBytes(testutil.MinimalDocx([]string{"실제 문단"}))
+	if err != nil {
+		t.Fatalf("OpenBytes b: %v", err)
+	}
+
+	_, _, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, false)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unrepresented_structure" {
+		t.Fatalf("base 가 0노드인데 기본 거절이 작동하지 않았다: %+v", errs)
+	}
+
+	_, sch, errs, err := tmpl.Extract([]*opc.Package{a, b}, []string{"a.docx", "b.docx"}, true)
+	if err != nil {
+		t.Fatalf("Extract(allow): %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("플래그를 줬는데 거절됐다: %+v", errs)
+	}
+	if len(sch.Unrepresented) != 1 {
+		t.Fatalf("unrepresented 가 %d건 (기대 1 — b 의 내용 전체): %+v", len(sch.Unrepresented), sch.Unrepresented)
+	}
+	u := sch.Unrepresented[0]
+	if u.Doc != "b.docx" {
+		t.Errorf("doc=%q (기대 b.docx)", u.Doc)
+	}
+	if u.Part != "word/document.xml" {
+		t.Errorf("part=%q", u.Part)
+	}
+	if u.Nodes == 0 {
+		t.Error("nodes 가 0 이다 — b 의 내용이 사라진 무게를 말해야 한다")
+	}
+}

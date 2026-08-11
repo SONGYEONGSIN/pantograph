@@ -186,3 +186,53 @@ func TestMatchCappedReportsPositionalFallback(t *testing.T) {
 		t.Fatalf("Pairs 가 %d개 (기대 %d — body + 형제 %d개, 위치로 짝지어졌다)", len(res.Pairs), n+1, n)
 	}
 }
+
+// TestMatchNilBoundaries 는 Match 의 nil 계약을 잠근다.
+//
+// tmpl.Extract 는 파트에 노드가 하나도 없어(align.BuildTree 가 nil 을 돌려줄
+// 때) 생기는 nil 트리를 Match 에 그대로 넘긴다 — 최종 리뷰가 지목한 Critical
+// 수정이 이 계약에 기댄다. Match 자신은 이미 nil 을 안전하게 처리하지만,
+// 그 계약을 어긴 것은 호출부(extract.go)였고 이 테스트 공백이 그걸 못
+// 잡은 이유였다. 특히 Match(nil, x) 가 x 를 통째로 OnlyB 에 담는지가
+// 핵심이다 — base 가 0노드일 때 상대 문서의 내용이 unrepresented 로
+// 신고되는 경로가 여기 달려있다.
+func TestMatchNilBoundaries(t *testing.T) {
+	x := tree(
+		[3]string{"body", "body", ""},
+		[3]string{"body/p[1]", "p", ""},
+		[3]string{"body/p[1]/t[1]", "t", "내용"},
+	)
+
+	t.Run("둘_다_nil", func(t *testing.T) {
+		res := Match(nil, nil)
+		if len(res.Pairs) != 0 || len(res.OnlyA) != 0 || len(res.OnlyB) != 0 {
+			t.Fatalf("Match(nil, nil) 이 비어있지 않다: %+v", res)
+		}
+	})
+
+	t.Run("a가_nil", func(t *testing.T) {
+		res := Match(nil, x)
+		if len(res.Pairs) != 0 {
+			t.Fatalf("Pairs 가 %d개 (기대 0): %+v", len(res.Pairs), res.Pairs)
+		}
+		if len(res.OnlyA) != 0 {
+			t.Fatalf("OnlyA 가 %d개 (기대 0): %v", len(res.OnlyA), paths(res.OnlyA))
+		}
+		if len(res.OnlyB) != 1 || res.OnlyB[0] != x {
+			t.Fatalf("OnlyB 가 x 하나를 통째로 담지 않았다: %v", paths(res.OnlyB))
+		}
+	})
+
+	t.Run("b가_nil", func(t *testing.T) {
+		res := Match(x, nil)
+		if len(res.Pairs) != 0 {
+			t.Fatalf("Pairs 가 %d개 (기대 0): %+v", len(res.Pairs), res.Pairs)
+		}
+		if len(res.OnlyB) != 0 {
+			t.Fatalf("OnlyB 가 %d개 (기대 0): %v", len(res.OnlyB), paths(res.OnlyB))
+		}
+		if len(res.OnlyA) != 1 || res.OnlyA[0] != x {
+			t.Fatalf("OnlyA 가 x 하나를 통째로 담지 않았다: %v", paths(res.OnlyA))
+		}
+	})
+}
