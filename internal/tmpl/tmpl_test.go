@@ -28,6 +28,20 @@ func pkgs(t *testing.T, forms ...[]string) ([]*opc.Package, []string) {
 	return out, names
 }
 
+// ptrs 는 Values 가 낸 값 맵을 Fill 의 입력 형태로 바꾼다.
+//
+// Values 는 map[string]string 그대로다 — 문서에서 **읽어낸** 값이라 "없음"도
+// null 도 나올 수 없고, 포인터로 바꾸면 생산자가 없는 상태(nil)를 읽는 쪽이
+// 매번 풀어야 한다. nil 과 "" 의 구분이 필요한 자리는 사용자 데이터가
+// 들어오는 Fill 의 매개변수 하나다.
+func ptrs(m map[string]string) map[string]*string {
+	out := make(map[string]*string, len(m))
+	for k, v := range m {
+		out[k] = &v
+	}
+	return out
+}
+
 func TestExtractFindsVariableParts(t *testing.T) {
 	ps, names := pkgs(t,
 		[]string{"청구서", "홍길동", "합계"},
@@ -341,7 +355,7 @@ func TestTemplateReversalBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
-	fillErrs, err := tmpl.Fill(filled, sch, vals)
+	fillErrs, err := tmpl.Fill(filled, sch, ptrs(vals))
 	if err != nil || len(fillErrs) != 0 {
 		t.Fatalf("Fill: err=%v errs=%+v", err, fillErrs)
 	}
@@ -397,7 +411,7 @@ func TestTemplateReversalReal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
-	if fe, err := tmpl.Fill(filled, sch, vals); err != nil || len(fe) != 0 {
+	if fe, err := tmpl.Fill(filled, sch, ptrs(vals)); err != nil || len(fe) != 0 {
 		t.Fatalf("Fill: err=%v errs=%+v", err, fe)
 	}
 
@@ -459,7 +473,7 @@ func TestPptxTemplateReversalReal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
-	if fe, err := tmpl.Fill(filled, sch, vals); err != nil || len(fe) != 0 {
+	if fe, err := tmpl.Fill(filled, sch, ptrs(vals)); err != nil || len(fe) != 0 {
 		t.Fatalf("Fill: err=%v errs=%+v", err, fe)
 	}
 
@@ -498,7 +512,7 @@ func TestTemplateReversalOthersTextLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
 	}
-	if fe, err := tmpl.Fill(filled, sch, vals); err != nil || len(fe) != 0 {
+	if fe, err := tmpl.Fill(filled, sch, ptrs(vals)); err != nil || len(fe) != 0 {
 		t.Fatalf("Fill: err=%v errs=%+v", err, fe)
 	}
 
@@ -520,12 +534,70 @@ func TestFillRejectsMissingKey(t *testing.T) {
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
 	}
-	fe, err := tmpl.Fill(tp, sch, map[string]string{})
+	fe, err := tmpl.Fill(tp, sch, map[string]*string{})
 	if err != nil {
 		t.Fatalf("Fill: %v", err)
 	}
 	if len(fe) != 1 || fe[0].Reason != "missing_key" {
 		t.Fatalf("빠진 키가 거절되지 않았다: %+v", fe)
+	}
+}
+
+// TestFillRejectsNullValue 는 값이 없는 키(nil)를 빠진 키와 같이 거절하는지
+// 본다. 사용자 데이터에서는 JSON 의 null 이 이 형태로 온다.
+//
+// 이유를 missing_key 로 같이 쓰는 까닭: 처방이 같다(값을 줘라). 무엇을
+// 봤는지는 Detail 이 구분해 말한다.
+func TestFillRejectsNullValue(t *testing.T) {
+	ps, names := pkgs(t, []string{"고정", "A"}, []string{"고정", "B"})
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+
+	fe, err := tmpl.Fill(tp, sch, map[string]*string{"k1": nil})
+	if err != nil {
+		t.Fatalf("Fill: %v", err)
+	}
+	if len(fe) != 1 || fe[0].Reason != "missing_key" {
+		t.Fatalf("null 값이 missing_key 로 거절되지 않았다: %+v", fe)
+	}
+	if !strings.Contains(fe[0].Detail, "null") {
+		t.Fatalf("안내가 null 을 짚지 않는다: %q", fe[0].Detail)
+	}
+	// 거절이면 템플릿은 그대로여야 한다 — 자리표시자가 남아 있다.
+	c, err := tp.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Contains(c, []byte("{{k1}}")) {
+		t.Fatalf("거절됐는데 자리표시자가 사라졌다: %s", c)
+	}
+}
+
+// TestFillAcceptsEmptyStringValue 는 빈 문자열이 정당한 값으로 남는지 본다.
+//
+// **이 테스트에는 RED 가 없다** — null 을 막으면서 "" 까지 막는 과잉 교정을
+// 잡는 경계 시험이다. patch 층의 TestSetTextWithEmptyStringAccepted 와 같은
+// 경계를 한 층 위에서 지킨다.
+func TestFillAcceptsEmptyStringValue(t *testing.T) {
+	ps, names := pkgs(t, []string{"고정", "A"}, []string{"고정", "B"})
+	tp, sch, errs, err := tmpl.Extract(ps, names, false)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Extract: err=%v errs=%+v", err, errs)
+	}
+
+	empty := ""
+	fe, err := tmpl.Fill(tp, sch, map[string]*string{"k1": &empty})
+	if err != nil || len(fe) != 0 {
+		t.Fatalf("빈 문자열이 거절됐다: err=%v errs=%+v", err, fe)
+	}
+	c, err := tp.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if bytes.Contains(c, []byte("{{k1}}")) {
+		t.Fatalf("빈 문자열이 적용되지 않았다: %s", c)
 	}
 }
 
@@ -545,7 +617,7 @@ func TestFillRejectsTemplateDrift(t *testing.T) {
 		t.Fatalf("Replace: %v", err)
 	}
 
-	fe, err := tmpl.Fill(tp, sch, map[string]string{"k1": "X"})
+	fe, err := tmpl.Fill(tp, sch, ptrs(map[string]string{"k1": "X"}))
 	if err != nil {
 		t.Fatalf("Fill: %v", err)
 	}

@@ -60,7 +60,14 @@ func Values(p *opc.Package, sch *Schema) (map[string]string, error) {
 // Fill 은 템플릿의 자리표시자를 데이터로 채운다. tp 를 제자리에서 수정한다.
 //
 // 새 엔진이 아니다 — setText 패치를 만들어 patch.Apply 에 넘긴다.
-func Fill(tp *opc.Package, sch *Schema, data map[string]string) ([]patch.Error, error) {
+//
+// data 의 값이 포인터인 이유는 patch.Op.Text 와 같다: **"값이 없다"(nil)와
+// "빈 값을 준다"("")를 구분해야 한다.** map[string]string 으로 받으면
+// encoding/json 이 JSON 의 null 을 "" 로 접으면서 **키는 만들어**, 아래
+// missing_key 검사가 통과하고 필드가 조용히 비워진다. 빈 문자열 자체는
+// 정당한 값(양식 필드 비우기)이라 "빈 값 금지"로는 풀 수 없고, 존재 여부를
+// 표현해야 한다.
+func Fill(tp *opc.Package, sch *Schema, data map[string]*string) ([]patch.Error, error) {
 	doc, err := parts.Open(tp)
 	if err != nil {
 		return nil, err
@@ -75,6 +82,16 @@ func Fill(tp *opc.Package, sch *Schema, data map[string]string) ([]patch.Error, 
 				Path:   k.Path,
 				Reason: "missing_key",
 				Detail: fmt.Sprintf("데이터에 %s 가 없다", k.Key),
+			})
+			continue
+		}
+		// null 은 값이 아니라 부재다. 이유를 나누지 않는 까닭: 처방이 같다
+		// (값을 줘라). Detail 만 무엇을 봤는지 구분해 말한다.
+		if v == nil {
+			errs = append(errs, patch.Error{
+				Path:   k.Path,
+				Reason: "missing_key",
+				Detail: fmt.Sprintf(`데이터의 %s 가 null 이다 — 값을 줘야 한다 (비우려면 "" 를 쓸 것)`, k.Key),
 			})
 			continue
 		}
@@ -111,7 +128,7 @@ func Fill(tp *opc.Package, sch *Schema, data map[string]string) ([]patch.Error, 
 			})
 			continue
 		}
-		ops = append(ops, patch.Op{Op: "setText", Part: partName, Path: k.Path, Text: patch.Str(v)})
+		ops = append(ops, patch.Op{Op: "setText", Part: partName, Path: k.Path, Text: patch.Str(*v)})
 	}
 	if len(errs) > 0 {
 		return errs, nil

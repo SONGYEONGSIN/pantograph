@@ -637,6 +637,65 @@ func TestApplyRejectsRawWithoutElement(t *testing.T) {
 	}
 }
 
+// TestTmplFillNullValue 는 데이터 JSON 의 null 이 값이 아니라 부재로
+// 취급되는지 본다.
+//
+// 실측된 결함: 데이터를 map[string]string 으로 디코드하면 encoding/json 이
+// null 을 "" 로 접으면서 **키는 만든다**. 그래서 Fill 의 `v, ok := data[k.Key]`
+// 가 ok=true 를 받아 missing_key 가 안 나고, 필드가 빈 채로 ok:true·exit 0 인
+// 문서가 나왔다. 이 브랜치가 patch.Op 에 세운 nil 과 "" 의 구분이 정작
+// 사용자 데이터를 받는 층 바로 앞에서 멈춰 있었다.
+//
+// 빈 문자열은 그대로 정당한 값이다 — 양식 필드를 비우는 것은 실제 요구다.
+// 둘을 한 테스트에 두어 과잉 교정이 바로 드러나게 한다.
+func TestTmplFillNullValue(t *testing.T) {
+	for _, c := range []struct {
+		name, data string
+		wantCode   int
+		wantOut    bool
+	}{
+		{"null 은 거절", `{"k1":null}`, exitInput, false},
+		{"빈 문자열은 허용", `{"k1":""}`, exitOK, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tplPath := filepath.Join(dir, "t.docx")
+			if err := os.WriteFile(tplPath, testutil.MinimalDocx([]string{"청구서", "{{k1}}"}), 0o644); err != nil {
+				t.Fatalf("템플릿 쓰기 실패: %v", err)
+			}
+			schemaPath := filepath.Join(dir, "schema.json")
+			schema := `{"base":"t.docx","keys":[{"key":"k1","part":"word/document.xml",` +
+				`"path":"document/body[1]/p[2]/r[1]/t[1]"}]}`
+			if err := os.WriteFile(schemaPath, []byte(schema), 0o644); err != nil {
+				t.Fatalf("스키마 쓰기 실패: %v", err)
+			}
+			dataPath := filepath.Join(dir, "data.json")
+			if err := os.WriteFile(dataPath, []byte(c.data), 0o644); err != nil {
+				t.Fatalf("데이터 쓰기 실패: %v", err)
+			}
+			outPath := filepath.Join(dir, "out.docx")
+
+			var code int
+			stdout := captureStdout(t, func() {
+				code = cmdTmplFill([]string{tplPath, "--schema", schemaPath, "-d", dataPath, "-o", outPath})
+			})
+			if code != c.wantCode {
+				t.Fatalf("exit=%d (기대 %d), stdout=%s", code, c.wantCode, stdout)
+			}
+			if c.wantCode == exitInput && !strings.Contains(stdout, "missing_key") {
+				t.Fatalf("stdout 에 missing_key 가 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+			}
+			_, err := os.Stat(outPath)
+			if c.wantOut && err != nil {
+				t.Fatalf("채워졌어야 하는데 출력 파일이 없다: %v, stdout=%s", err, stdout)
+			}
+			if !c.wantOut && !os.IsNotExist(err) {
+				t.Fatalf("거절된 데이터가 출력 파일을 만들었다: %v", err)
+			}
+		})
+	}
+}
+
 // TestTmplFillRejectsUnknownSchemaField 는 스키마 JSON 의 오타도 같은 이유로
 // 거절하는지 본다. 스키마는 키마다 part·path 를 들고 있어, 필드 하나가 조용히
 // 비면 채우기가 엉뚱한 곳을 가리키거나 아무 데도 안 간다.

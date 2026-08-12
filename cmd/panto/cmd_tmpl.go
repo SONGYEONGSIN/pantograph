@@ -160,7 +160,10 @@ func cmdTmplFill(args []string) int {
 	if err != nil {
 		return die(exitInternal, "%v", err)
 	}
-	var data map[string]string
+	// 값이 *string 인 이유: JSON 의 null 과 "" 를 구분해야 한다. string 으로
+	// 받으면 encoding/json 이 null 을 "" 로 접으면서 키는 만들어, Fill 의
+	// missing_key 검사를 통과한 채 필드가 조용히 비워진다 (tmpl.Fill 주석).
+	var data map[string]*string
 	if err := decodeStrict(db, &data); err != nil {
 		return die(exitInput, "데이터 JSON 파싱 실패: %v", err)
 	}
