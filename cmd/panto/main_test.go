@@ -961,3 +961,31 @@ func TestT5DiffAndTmplAgreeOnAlignment(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyRejectsSetTextWithXMLField 는 설계 §1 증상 3 의 회귀 시험이다.
+//
+// 측정된 사실: {"op":"setText","path":…,"xml":…} 가 ok:true 를 내면서 대상
+// 텍스트를 지웠다. PR #3 의 DisallowUnknownFields 는 모르는 키만 막고, xml 은
+// Op 가 아는 키라 그대로 통과했다.
+func TestApplyRejectsSetTextWithXMLField(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"지켜져야 할 텍스트"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	bad := `{"ops":[{"op":"setText","path":"document/body[1]/p[1]/r[1]/t[1]","xml":"<w:t>바뀜</w:t>"}]}`
+	if err := os.WriteFile(patchPath, []byte(bad), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	if code != exitInput {
+		t.Fatalf("setText 에 xml 을 준 패치인데 exit=%d (기대 %d)", code, exitInput)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}

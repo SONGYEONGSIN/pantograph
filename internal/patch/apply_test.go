@@ -1122,3 +1122,84 @@ func TestFieldCheckPrecedesPathLookup(t *testing.T) {
 		})
 	}
 }
+
+// TestUnusedFieldRejected 는 연산이 쓰지 않는 필드가 오면 거절하는지 본다.
+//
+// setText 에 xml 을 준 첫 케이스가 설계 §1 증상 3 이다 — 오늘은 xml 이 조용히
+// 무시되고 text 가 빈 값으로 적용되어 텍스트가 사라진다.
+func TestUnusedFieldRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		op   patch.Op
+	}{
+		{"setText 에 xml", patch.Op{Op: "setText", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]/r[1]/t[1]", XML: patch.Str(`<w:t>바뀜</w:t>`)}},
+		{"replaceRaw 에 text", patch.Op{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]", Text: patch.Str("바뀜")}},
+		{"delete 에 text", patch.Op{Op: "delete", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]", Text: patch.Str("바뀜")}},
+		{"delete 에 xml", patch.Op{Op: "delete", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p/>`)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := open(t, testutil.MinimalDocx([]string{"지켜져야 할 텍스트"}))
+			errs, err := patch.Apply(p, patch.Patch{Hash: p.Hash, Ops: []patch.Op{c.op}})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != "unused_field" {
+				t.Fatalf("안 쓰는 필드가 거절되지 않았다: %+v", errs)
+			}
+			content, err := p.Part("word/document.xml")
+			if err != nil {
+				t.Fatalf("Part: %v", err)
+			}
+			if !bytes.Contains(content, []byte("지켜져야 할 텍스트")) {
+				t.Fatalf("거절됐는데 내용이 바뀌었다: %s", content)
+			}
+		})
+	}
+}
+
+// TestUnusedFieldWinsOverMissingField 는 두 결함이 겹칠 때 어느 이유를 내는지
+// 고정한다 (설계 §3.2).
+//
+// {"op":"setText","xml":…} 는 text 도 없고 안 쓰는 필드도 있다. 사용자가 실제로
+// 한 실수는 "필드를 잘못 골랐다"이지 "값을 빠뜨렸다"가 아니므로 unused_field 를
+// 낸다. missing_text 를 내면 사용자는 text 를 더하고 xml 은 그대로 둔 채
+// 두 번째 오류를 만난다.
+func TestUnusedFieldWinsOverMissingField(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"지켜져야 할 텍스트"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]/r[1]/t[1]", XML: patch.Str(`<w:t>바뀜</w:t>`)}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unused_field" {
+		t.Fatalf("겹친 결함에서 unused_field 가 아니다: %+v", errs)
+	}
+}
+
+// TestUnusedFieldCheckedBeforePathLookup 은 경로까지 틀린 패치에서 필드 오류를
+// 먼저 내는지 본다 (설계 §3.2). 경로 오류를 먼저 내면 사용자는 경로를 고친 뒤
+// 두 번째 오류를 만난다.
+func TestUnusedFieldCheckedBeforePathLookup(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml",
+			Path: "document/body[1]/p[99]/r[1]/t[1]", XML: patch.Str(`<w:t>바뀜</w:t>`)}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unused_field" {
+		t.Fatalf("경로 오류보다 필드 오류가 먼저 나오지 않았다: %+v", errs)
+	}
+}

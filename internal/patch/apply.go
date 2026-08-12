@@ -140,14 +140,25 @@ func resolvePart(doc *parts.Document, op Op) (string, *Error) {
 // Op 는 합집합 타입이다 — Text 는 setText 전용, XML 은 replaceRaw 전용이고
 // delete 는 둘 다 쓰지 않는다. 이 계약을 검사하지 않으면 필드를 잘못 고르거나
 // 빠뜨린 패치가 조용히 내용을 지운다 (설계 §1).
+//
+// 순서가 진단의 품질이다: 안 쓰는 필드를 먼저 본다. setText 에 xml 만 준
+// 입력은 "값을 빠뜨렸다"가 아니라 "필드를 잘못 골랐다"이기 때문이다 (설계 §3.2).
 func checkFields(op Op) *Error {
 	switch op.Op {
 	case "setText":
+		if op.XML != nil {
+			return &Error{Path: op.Path, Reason: "unused_field",
+				Detail: "setText 는 xml 을 쓰지 않는다 — 텍스트는 text 에 준다"}
+		}
 		if op.Text == nil {
 			return &Error{Path: op.Path, Reason: "missing_text",
 				Detail: "setText 에 text 가 없다"}
 		}
 	case "replaceRaw":
+		if op.Text != nil {
+			return &Error{Path: op.Path, Reason: "unused_field",
+				Detail: "replaceRaw 는 text 를 쓰지 않는다 — 마크업은 xml 에 준다"}
+		}
 		if op.XML == nil {
 			return &Error{Path: op.Path, Reason: "missing_xml",
 				Detail: "replaceRaw 에 xml 이 없다"}
@@ -155,6 +166,11 @@ func checkFields(op Op) *Error {
 		if *op.XML == "" {
 			return &Error{Path: op.Path, Reason: "empty_xml",
 				Detail: "replaceRaw 의 xml 이 비었다 — 노드를 지우려면 delete 를 쓸 것"}
+		}
+	case "delete":
+		if op.Text != nil || op.XML != nil {
+			return &Error{Path: op.Path, Reason: "unused_field",
+				Detail: "delete 는 text·xml 을 쓰지 않는다 — 지울 노드는 path 로만 지목한다"}
 		}
 	}
 	return nil
