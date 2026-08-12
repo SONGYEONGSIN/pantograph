@@ -4,7 +4,7 @@
 // 문서 상태를 잃는 최악의 실패다 (spec §9).
 package patch
 
-// Op 는 패치 연산 하나다. 이번 슬라이스의 연산은 setText 와 replaceRaw 둘뿐이다.
+// Op 는 패치 연산 하나다. 연산은 setText·replaceRaw·delete 셋이다.
 // Part 는 물리 파트 경로("ppt/slides/slide1.xml") 또는 논리 참조("pptx/slide[1]")다.
 // 비어 있으면 본문 파트가 하나인 문서에 한해 그것으로 간주한다 — docx 하위호환.
 type Op struct {

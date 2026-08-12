@@ -173,6 +173,21 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 		switch op.Op {
 		case "replaceRaw":
 			splices = append(splices, splice{span: n.Span, repl: []byte(op.XML), path: op.Path})
+		case "delete":
+			// 루트를 지우면 파트가 XML 선언만 남은 파일이 된다. 재스캔이 잡긴
+			// 하지만 그 이유(invalid_xml)는 "네가 준 XML 이 나쁘다"는 뜻이라
+			// 사용자가 준 XML 이 없는 delete 에는 틀린 진단이다.
+			if op.Path == part.Root {
+				errs = append(errs, Error{
+					Path:   op.Path,
+					Reason: "delete_root",
+					Detail: fmt.Sprintf("루트 노드 %s 는 지울 수 없다 — 파트가 빈 파일이 된다", part.Root),
+				})
+				continue
+			}
+			// 요소 전체를 폭 0 으로 치환한다. 앞뒤 공백·개행은 건드리지 않는다 —
+			// 인접 바이트를 먹으면 어디까지 지웠는지가 흐려지고 I2 논증이 약해진다.
+			splices = append(splices, splice{span: n.Span, repl: nil, path: op.Path})
 		case "setText":
 			// 거절 문구는 포맷 특정 요소 이름을 대지 않는다 — 같은 텍스트 요소가
 			// docx 에서는 w:t, pptx 에서는 a:t 다. setText 의 규칙은 "Word 의
@@ -221,7 +236,7 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 			errs = append(errs, Error{
 				Path:   op.Path,
 				Reason: "unknown_op",
-				Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw)", op.Op),
+				Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw | delete)", op.Op),
 			})
 		}
 	}

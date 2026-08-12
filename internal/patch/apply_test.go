@@ -827,3 +827,112 @@ func TestLazyPartLoading(t *testing.T) {
 		t.Fatalf("스캔된 파트 %v — 1개(%s)만 스캔해야 한다", loaded, target)
 	}
 }
+
+// TestDeleteRemovesNode 는 delete 가 노드를 통째로 지우고 형제는 남기는지 본다.
+// 지운 뒤에는 경로 번호가 밀리므로 경로가 아니라 텍스트로 확인한다.
+func TestDeleteRemovesNode(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"첫째", "둘째", "셋째"})
+	p := open(t, src)
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "delete", Part: "word/document.xml", Path: "document/body[1]/p[2]"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("에러가 없어야 하는데: %+v", errs)
+	}
+
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if bytes.Contains(content, []byte("둘째")) {
+		t.Fatalf("지워지지 않았다: %s", content)
+	}
+	if !bytes.Contains(content, []byte("첫째")) || !bytes.Contains(content, []byte("셋째")) {
+		t.Fatalf("형제가 함께 사라졌다: %s", content)
+	}
+	// 요소 껍데기까지 지워야 한다 — 텍스트만 비우면 빈 문단이 남는다.
+	if bytes.Contains(content, []byte(`w14:paraId="00000002"`)) {
+		t.Fatalf("요소가 남았다: %s", content)
+	}
+}
+
+// TestDeleteRootRejected 는 루트 삭제를 사전에 거절하는지 본다.
+//
+// 막지 않아도 결과 재스캔이 잡지만, 그 이유는 invalid_xml("네가 준 XML 이
+// 나쁘다")이다. delete 에는 사용자가 준 XML 이 없으니 틀린 이유를 대게 된다.
+func TestDeleteRootRejected(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "delete", Part: "word/document.xml", Path: "document"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "delete_root" {
+		t.Fatalf("루트 삭제가 delete_root 로 거절되지 않았다: %+v", errs)
+	}
+}
+
+// TestDeleteLocalityUntouchedEntriesAreByteIdentical 는 I2 국소성이 삭제에도
+// 성립하는지 본다 — 손대지 않은 엔트리는 압축 데이터까지 같아야 한다.
+func TestDeleteLocalityUntouchedEntriesAreByteIdentical(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"제목", "본문"})
+	p := open(t, src)
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "delete", Part: "word/document.xml", Path: "document/body[1]/p[2]"}},
+	})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
+	}
+	got, err := p.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+
+	before, after := rawEntries(t, src), rawEntries(t, got)
+	for name, wantRaw := range before {
+		gotRaw, ok := after[name]
+		if !ok {
+			t.Fatalf("엔트리 사라짐: %s", name)
+		}
+		if name == "word/document.xml" {
+			if bytes.Equal(wantRaw, gotRaw) {
+				t.Fatal("삭제한 파트인데 압축 데이터가 그대로다")
+			}
+			continue
+		}
+		if !bytes.Equal(wantRaw, gotRaw) {
+			t.Fatalf("안 건드린 엔트리의 압축 데이터가 달라졌다: %s", name)
+		}
+	}
+}
+
+// TestDeleteOverlappingSetTextRejected 는 지우는 서브트리 안을 동시에 고치는
+// 패치를 겹침으로 거절하는지 본다. 순서에 따라 결과가 달라지므로 (I3) 둘 다
+// 적용해선 안 된다.
+func TestDeleteOverlappingSetTextRejected(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "본문"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{
+			{Op: "delete", Part: "word/document.xml", Path: "document/body[1]/p[2]"},
+			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[2]/r[1]/t[1]", Text: "바뀜"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "overlap" {
+		t.Fatalf("겹치는 delete+setText 가 거절되지 않았다: %+v", errs)
+	}
+}
