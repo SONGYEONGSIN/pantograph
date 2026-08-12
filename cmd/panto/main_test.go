@@ -527,6 +527,32 @@ func TestApplyRejectsUnknownPatchField(t *testing.T) {
 	}
 }
 
+// TestApplyRejectsEmptyPart 는 루트를 빈 XML 로 치환해 모든 요소를 지우려는
+// replaceRaw 를 거절하는지 본다. CLI 에서도 출력 파일을 만들지 않는지 확인한다.
+func TestApplyRejectsEmptyPart(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"지켜져야 할 텍스트"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	// 루트를 공백만으로 치환 — 결과에 요소가 하나도 없음
+	patch := `{"ops":[{"op":"replaceRaw","path":"document","xml":"   "}]}`
+	if err := os.WriteFile(patchPath, []byte(patch), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	if code != exitInput {
+		t.Fatalf("빈 파트 거절인데 exit=%d (기대 %d)", code, exitInput)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
 // TestTmplFillRejectsUnknownSchemaField 는 스키마 JSON 의 오타도 같은 이유로
 // 거절하는지 본다. 스키마는 키마다 part·path 를 들고 있어, 필드 하나가 조용히
 // 비면 채우기가 엉뚱한 곳을 가리키거나 아무 데도 안 간다.

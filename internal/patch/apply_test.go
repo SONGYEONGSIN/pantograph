@@ -936,3 +936,33 @@ func TestDeleteOverlappingSetTextRejected(t *testing.T) {
 		t.Fatalf("겹치는 delete+setText 가 거절되지 않았다: %+v", errs)
 	}
 }
+
+// TestEmptyPartRejected 는 루트를 빈 XML 로 치환해 모든 요소를 제거하려는 시도를
+// empty_part 로 거절하는지 본다.
+//
+// 막지 않으면 replaceRaw 가 문서 전체를 파괴하고 ok:true 를 내보낸다.
+func TestEmptyPartRejected(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"제목", "본문"})
+	p := open(t, src)
+
+	// 루트를 공백만으로 치환하면 결과에 요소가 하나도 없어진다.
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document", XML: "   "}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "empty_part" {
+		t.Fatalf("빈 파트가 empty_part 로 거절되지 않았다: %+v", errs)
+	}
+
+	// 문서는 손대지 않아야 한다 — 원자성.
+	got, err := p.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+	if !bytes.Equal(src, got) {
+		t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+	}
+}

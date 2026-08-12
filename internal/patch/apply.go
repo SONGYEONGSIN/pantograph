@@ -174,9 +174,10 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 		case "replaceRaw":
 			splices = append(splices, splice{span: n.Span, repl: []byte(op.XML), path: op.Path})
 		case "delete":
-			// 루트를 지우면 파트가 XML 선언만 남은 파일이 된다. 재스캔이 잡긴
-			// 하지만 그 이유(invalid_xml)는 "네가 준 XML 이 나쁘다"는 뜻이라
-			// 사용자가 준 XML 이 없는 delete 에는 틀린 진단이다.
+			// 루트를 지우면 파트가 XML 선언만 남은 파일이 된다. 재스캔이 이를
+			// empty_part 로 잡을 텐데, 사용자가 주지 않은 XML 을 재스캔으로
+			// 책임지기보다 사전에 거절하는 쪽이 낫다. 루트는 "할 수 없다",
+			// 다른 노드는 "할 수 있다"는 뜻의 분리된 거절이다.
 			if op.Path == part.Root {
 				errs = append(errs, Error{
 					Path:   op.Path,
@@ -278,11 +279,12 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 	// 결함은 전적으로 호출자가 준 XML 에 있으므로 입력 오류(코드 1)로 보고한다.
 	// 내부 오류(코드 2)로 보내면, 종료 코드로 재시도 여부를 판단하는 에이전트가
 	// "패치를 고쳐 다시 시도"가 아니라 "도구가 고장났으니 포기"로 잘못 분기한다 (spec §9).
-	if _, err := xmlscan.Scan(out, part.Root); err != nil {
+	reason, detail := badResult(out, part.Root)
+	if reason != "" {
 		return nil, []Error{{
 			Path:   blame(content, splices, part.Root),
-			Reason: "invalid_xml",
-			Detail: fmt.Sprintf("적용 결과가 유효한 XML 이 아니다 (문서는 손대지 않았다): %v", err),
+			Reason: reason,
+			Detail: detail,
 		}}
 	}
 
@@ -301,11 +303,27 @@ func blame(content []byte, splices []splice, rootAlias string) string {
 		buf.Write(content[:s.span.Start])
 		buf.Write(s.repl)
 		buf.Write(content[s.span.End:])
-		if _, err := xmlscan.Scan(buf.Bytes(), rootAlias); err != nil {
+		reason, _ := badResult(buf.Bytes(), rootAlias)
+		if reason != "" {
 			return s.path
 		}
 	}
 	return splices[0].path
+}
+
+// badResult 는 스플라이스 결과가 파트로서 성립하지 않는 이유를 돌려준다.
+// 성립하면 reason 이 빈 문자열이다.
+func badResult(out []byte, rootAlias string) (reason, detail string) {
+	tree, err := xmlscan.Scan(out, rootAlias)
+	if err != nil {
+		// Scan 이 에러를 내면 XML 파싱 실패다.
+		return "invalid_xml", fmt.Sprintf("적용 결과가 유효한 XML 이 아니다 (문서는 손대지 않았다): %v", err)
+	}
+	// Scan 이 성공해도 요소가 하나도 없으면 파트가 성립하지 않는다.
+	if len(tree.Nodes) == 0 {
+		return "empty_part", "적용 결과에 요소가 하나도 없다 (문서는 손대지 않았다)"
+	}
+	return "", ""
 }
 
 // nearbyHint 는 경로를 못 찾았을 때 형제 개수를 알려준다.
