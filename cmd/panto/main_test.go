@@ -503,7 +503,8 @@ func TestApplyEmptyPatchIsByteIdentical(t *testing.T) {
 // encoding/json 은 모르는 필드를 조용히 버린다. 그래서 "text" 를 "value" 로
 // 잘못 쓴 setText 는 빈 문자열로 성공했다 — {"ok": true} 를 내면서 문서의
 // 텍스트를 지웠다. 빈 텍스트 자체는 정당한 연산이라 결과만 봐서는 오타와
-// 구별되지 않으므로, 막을 수 있는 지점은 디코드뿐이다.
+// 구별되지 않는다. 디코드에서 모르는 필드를 막고(여기), 검증에서 빠뜨린
+// 필드를 막는다(patch.checkFields) — 두 겹이다.
 func TestApplyRejectsUnknownPatchField(t *testing.T) {
 	dir := t.TempDir()
 	inPath := filepath.Join(dir, "in.docx")
@@ -521,6 +522,57 @@ func TestApplyRejectsUnknownPatchField(t *testing.T) {
 	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
 	if code != exitInput {
 		t.Fatalf("모르는 필드가 있는 패치인데 exit=%d (기대 %d)", code, exitInput)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
+// TestApplyRejectsRawWithoutXML 은 설계 §1 증상 1 의 회귀 시험이다.
+//
+// 측정된 사실: {"op":"replaceRaw","path":…} (xml 없음) 이 ok:true 를 내면서
+// 문단을 지웠다. exit 0 이라 호출자는 성공으로 읽고 넘어간다.
+func TestApplyRejectsRawWithoutXML(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	bad := `{"ops":[{"op":"replaceRaw","path":"document/body[1]/p[2]"}]}`
+	if err := os.WriteFile(patchPath, []byte(bad), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	if code != exitInput {
+		t.Fatalf("xml 없는 replaceRaw 인데 exit=%d (기대 %d)", code, exitInput)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
+// TestApplyRejectsRawWithEmptyXML 은 설계 §1 증상 2 의 회귀 시험이다.
+func TestApplyRejectsRawWithEmptyXML(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	bad := `{"ops":[{"op":"replaceRaw","path":"document/body[1]/p[2]","xml":""}]}`
+	if err := os.WriteFile(patchPath, []byte(bad), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	if code != exitInput {
+		t.Fatalf("빈 xml 인 replaceRaw 인데 exit=%d (기대 %d)", code, exitInput)
 	}
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
 		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)

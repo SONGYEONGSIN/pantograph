@@ -157,7 +157,7 @@ func Extract(pkgs []*opc.Package, names []string, allowUnrepresented bool) (*opc
 						}
 						keys = append(keys, Key{Key: key, Part: pt.Name, Path: n.Path, Samples: samples})
 						ops = append(ops, patch.Op{Op: "setText", Part: pt.Name,
-							Path: n.Path, Text: "{{" + key + "}}"})
+							Path: n.Path, Text: patch.Str("{{" + key + "}}")})
 					}
 				}
 			}

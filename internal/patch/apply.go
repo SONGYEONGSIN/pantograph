@@ -14,7 +14,7 @@ import (
 // xmlEscaper 는 텍스트 노드에서 의미를 갖는 세 글자만 이스케이프한다.
 // xml.EscapeText 는 개행·탭까지 문자 참조로 바꿔 원본에 없던 바이트를 만든다.
 // 이미 이스케이프된 입력(예: "&amp;")은 다시 이스케이프된다("&amp;amp;") —
-// op.Text 는 항상 순수 텍스트(디코딩된 값)로 취급하므로 의도된 동작이다.
+// *op.Text 는 항상 순수 텍스트(디코딩된 값)로 취급하므로 의도된 동작이다.
 var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 type splice struct {
@@ -135,6 +135,31 @@ func resolvePart(doc *parts.Document, op Op) (string, *Error) {
 	return "", &Error{Path: op.Path, Reason: se.Reason, Detail: se.Detail}
 }
 
+// checkFields 는 연산과 필드가 맞는지 본다.
+//
+// Op 는 합집합 타입이다 — Text 는 setText 전용, XML 은 replaceRaw 전용이고
+// delete 는 둘 다 쓰지 않는다. 이 계약을 검사하지 않으면 필드를 잘못 고르거나
+// 빠뜨린 패치가 조용히 내용을 지운다 (설계 §1).
+func checkFields(op Op) *Error {
+	switch op.Op {
+	case "setText":
+		if op.Text == nil {
+			return &Error{Path: op.Path, Reason: "missing_text",
+				Detail: "setText 에 text 가 없다"}
+		}
+	case "replaceRaw":
+		if op.XML == nil {
+			return &Error{Path: op.Path, Reason: "missing_xml",
+				Detail: "replaceRaw 에 xml 이 없다"}
+		}
+		if *op.XML == "" {
+			return &Error{Path: op.Path, Reason: "empty_xml",
+				Detail: "replaceRaw 의 xml 이 비었다 — 노드를 지우려면 delete 를 쓸 것"}
+		}
+	}
+	return nil
+}
+
 // spliceOne 은 파트 하나에 그 파트의 op 들을 적용해 스플라이스된 버퍼를 낸다.
 // 반환은 (out, nil) 또는 (nil, errs) 다 — 에러가 있으면 버퍼를 만들지 않는다.
 func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) {
@@ -161,6 +186,14 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 		}
 		seen[op.Path] = true
 
+		// 필드 정합을 경로 조회보다 먼저 본다. 필드가 틀렸다는 건 경로가
+		// 존재하든 말든 사실이고, 경로까지 틀린 패치에서 path_not_found 만
+		// 보여주면 사용자가 경로를 고친 뒤 두 번째 오류를 만난다.
+		if e := checkFields(op); e != nil {
+			errs = append(errs, *e)
+			continue
+		}
+
 		n, ok := tree.Lookup(op.Path)
 		if !ok {
 			errs = append(errs, Error{
@@ -172,7 +205,7 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 		}
 		switch op.Op {
 		case "replaceRaw":
-			splices = append(splices, splice{span: n.Span, repl: []byte(op.XML), path: op.Path})
+			splices = append(splices, splice{span: n.Span, repl: []byte(*op.XML), path: op.Path})
 		case "delete":
 			// 루트를 지우면 파트가 XML 선언만 남은 파일이 된다. 재스캔이 이를
 			// empty_part 로 잡을 텐데, 사용자가 주지 않은 XML 을 재스캔으로
@@ -217,7 +250,7 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 			// 없는데 속성을 붙여주면 원본에 없던 바이트가 생겨 I4a 가 깨진다.
 			// 네임스페이스까지 본다 — 로컬명만 보면 아무 네임스페이스의
 			// space 속성이나 xml:space 로 통과한다.
-			if strings.TrimSpace(op.Text) != op.Text {
+			if strings.TrimSpace(*op.Text) != *op.Text {
 				if v, ok := n.AttrNS(xmlscan.XMLNS, "space"); !ok || v != "preserve" {
 					errs = append(errs, Error{
 						Path:   op.Path,
@@ -230,7 +263,7 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 			// Inner 만 교체한다 — 시작 태그의 속성을 건드리면 I4a 가 깨진다.
 			splices = append(splices, splice{
 				span: n.Inner,
-				repl: []byte(xmlEscaper.Replace(op.Text)),
+				repl: []byte(xmlEscaper.Replace(*op.Text)),
 				path: op.Path,
 			})
 		default:

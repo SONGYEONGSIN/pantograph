@@ -111,7 +111,7 @@ func Fill(tp *opc.Package, sch *Schema, data map[string]string) ([]patch.Error, 
 			})
 			continue
 		}
-		ops = append(ops, patch.Op{Op: "setText", Part: partName, Path: k.Path, Text: v})
+		ops = append(ops, patch.Op{Op: "setText", Part: partName, Path: k.Path, Text: patch.Str(v)})
 	}
 	if len(errs) > 0 {
 		return errs, nil
