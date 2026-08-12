@@ -863,8 +863,15 @@ func TestDeleteRemovesNode(t *testing.T) {
 
 // TestDeleteRootRejected 는 루트 삭제를 사전에 거절하는지 본다.
 //
-// 막지 않아도 결과 재스캔이 잡지만, 그 이유는 invalid_xml("네가 준 XML 이
-// 나쁘다")이다. delete 에는 사용자가 준 XML 이 없으니 틀린 이유를 대게 된다.
+// 이 자리에 있던 "막지 않아도 재스캔이 invalid_xml 로 잡는다"는 주장은
+// 거짓이었다 — xmlscan.Scan 은 요소가 하나도 없는 입력을 그냥 통과시킨다
+// (스택이 빈 채로 끝나 어느 오류 조건에도 안 걸린다). 그래서 empty_part 가
+// 생기기 전에는 가드를 빼면 errs 가 **비고** 내용 없는 파트가 조용히 쓰였다.
+//
+// 지금 가드를 빼고 재면 나오는 사유는 empty_part 다 (실측: 가드를 무력화하고
+// form-a.docx 에 루트 delete → empty_part, exit 1, 출력 파일 없음). 그래도
+// 사전 거절을 남기는 이유는 처방이 다르기 때문이다 — delete_root 는 "지울
+// 대상을 좁혀라", empty_part 는 "무엇을 남길지 정해라"다.
 func TestDeleteRootRejected(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 

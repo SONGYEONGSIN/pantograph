@@ -88,8 +88,12 @@ func TestDeleteRemovesNode(t *testing.T) {
 
 // TestDeleteRootRejected 는 루트 삭제를 사전에 거절하는지 본다.
 //
-// 막지 않아도 결과 재스캔이 잡지만, 그 이유는 invalid_xml("네가 준 XML 이
-// 나쁘다")이다. delete 에는 사용자가 준 XML 이 없으니 틀린 이유를 대게 된다.
+// (측정으로 정정 — 스펙 §3.1) 이 자리의 초안은 "막지 않아도 재스캔이
+// invalid_xml 로 잡는다"였는데 거짓이다. xmlscan.Scan 은 요소가 하나도 없는
+// 입력을 통과시키므로, empty_part 가 생기기 전에는 가드를 빼면 errs 가 비고
+// 내용 없는 파트가 조용히 쓰였다. empty_part 가 선 뒤로는 가드를 빼면
+// empty_part 가 나온다. 그래도 사전 거절을 두는 이유는 처방이 달라서다 —
+// delete_root 는 "지울 대상을 좁혀라", empty_part 는 "무엇을 남길지 정해라".
 func TestDeleteRootRejected(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 
@@ -177,9 +181,11 @@ go test ./internal/patch/ -run 'TestDelete' -count=1
 
 ```go
 		case "delete":
-			// 루트를 지우면 파트가 XML 선언만 남은 파일이 된다. 재스캔이 잡긴
-			// 하지만 그 이유(invalid_xml)는 "네가 준 XML 이 나쁘다"는 뜻이라
-			// 사용자가 준 XML 이 없는 delete 에는 틀린 진단이다.
+			// 루트를 지우면 파트가 XML 선언만 남은 파일이 된다. 재스캔이 이를
+			// empty_part 로 잡을 텐데(invalid_xml 이 아니다 — 스펙 §3.1),
+			// 사용자가 주지 않은 XML 을 재스캔으로 책임지기보다 사전에
+			// 거절하는 쪽이 낫다. 루트는 "할 수 없다", 다른 노드는 "할 수
+			// 있다"는 뜻의 분리된 거절이다.
 			if op.Path == part.Root {
 				errs = append(errs, Error{
 					Path:   op.Path,
@@ -221,8 +227,9 @@ gofmt -l . && go vet ./...
 git add internal/patch/apply.go internal/patch/patch.go internal/patch/apply_test.go
 git commit -m "feat: delete 연산 — 노드를 명시적으로 지운다
 
-루트 삭제는 사전에 거절한다. 막지 않아도 재스캔이 잡지만 그 이유가
-invalid_xml 이라, 사용자가 준 XML 이 없는 delete 에는 틀린 진단이 된다."
+루트 삭제는 사전에 거절한다. 막지 않으면 파트가 요소 하나 없는 파일이
+되는데, 그 결과를 사후에 empty_part 로 말하기보다 무엇을 고쳐야 하는지를
+사전에 말하는 쪽이 낫다."
 ```
 
 ---
