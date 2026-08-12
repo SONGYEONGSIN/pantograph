@@ -67,6 +67,7 @@ XML  *string `json:"xml,omitempty"`  // replaceRaw
 | `{"op":"setText",…,"xml":…}` | **거절** `unused_field` | 증상 3 |
 | `{"op":"replaceRaw","path":…}` | **거절** `missing_xml` | 증상 1 |
 | `{"op":"replaceRaw",…,"xml":""}` | **거절** `empty_xml` | 증상 2 |
+| `{"op":"replaceRaw",…,"xml":" "}` | **거절** `empty_xml` | §3.3 (전체 브랜치 리뷰가 실측) |
 | `{"op":"delete",…,"text":…}` | **거절** `unused_field` | — |
 
 `delete` 없이 §2.2 만 하면 삭제할 방법 자체가 사라진다. 둘은 같은 슬라이스여야 한다.
@@ -79,10 +80,10 @@ XML  *string `json:"xml,omitempty"`  // replaceRaw
 |---|---|---|
 | `missing_text` | `setText` 에 `text` 가 없다 | 값을 써라 |
 | `missing_xml` | `replaceRaw` 에 `xml` 이 없다 | 내용을 써라 |
-| `empty_xml` | `replaceRaw` 의 `xml` 이 `""` | **지우려면 `delete` 를 써라** |
+| `empty_xml` | `replaceRaw` 의 `xml` 에 요소가 하나도 없다 (`""`·공백·주석·텍스트) | **지우려면 `delete` 를 써라** |
 | `unused_field` | 이 연산이 안 쓰는 필드가 왔다 | 필드를 빼거나 연산을 고쳐라 |
 | `delete_root` | 루트 노드를 지우려 한다 | 지울 대상을 좁혀라 |
-| `empty_part` | 적용 결과에 요소가 하나도 없다 | 무엇을 남길지 정해라 |
+| `empty_part` | 적용 결과에 요소가 하나도 없다 (§3.3 이후 도달 불가 — 백스톱) | 무엇을 남길지 정해라 |
 
 `missing_xml` 과 `empty_xml` 을 합치지 않는 이유: 전자는 "내용을 빠뜨렸다", 후자는 "지우려 했다"로 **의도가 다르고 처방이 다르다.**
 
@@ -111,7 +112,7 @@ $ echo $?
 
 기존 코드는 op 마다 이유를 하나 내고 `continue` 한다. 그 골격을 유지하되 순서를 고정한다:
 
-1. **필드 정합** — 안 쓰는 필드(`unused_field`) → 빠뜨린 필드(`missing_text`/`missing_xml`) → 빈 값(`empty_xml`)
+1. **필드 정합** — 안 쓰는 필드(`unused_field`) → 빠뜨린 필드(`missing_text`/`missing_xml`) → 요소 없는 값(`empty_xml`, §3.3) → 모르는 연산(`unknown_op`)
 2. **경로 조회** — `path_not_found`
 3. **연산별 검사** — `type_mismatch`·`self_closing_target`·`whitespace_needs_preserve`·`delete_root`
 
@@ -119,11 +120,31 @@ $ echo $?
 
 필드 정합을 경로 조회보다 먼저 두는 이유: 필드가 틀렸다는 건 경로가 존재하든 말든 사실이고, 경로까지 틀린 패치에서 `path_not_found` 만 보여주면 사용자가 경로를 고친 뒤 두 번째 오류를 만나게 된다.
 
+같은 논증이 연산 이름에도 적용된다 — 이름이 틀렸다는 건 경로가 존재하든 말든 사실이므로 `unknown_op` 도 경로 조회보다 먼저 낸다.
+
+### 3.3 요소 규칙 — `""` 만 보면 옆 문이 열려 있다 (측정으로 정정)
+
+전체 브랜치 리뷰가 실측했다 (`testdata/real/form-a.docx`, 문단 6개). 아래 셋 모두 문단이 사라지고 `{"ok":true}`, exit 0, 출력 파일 생성:
+
+```
+{"op":"replaceRaw","path":"document/body[1]/p[6]","xml":" "}
+{"op":"replaceRaw","path":"document/body[1]/p[6]","xml":"<!-- gone -->"}
+{"op":"replaceRaw","path":"document/body[1]/p[6]","xml":"\n\t"}
+```
+
+`empty_xml` 은 `xml == ""` 만 봤고, `empty_part` 는 파트 전체가 비어야 발동하므로 대상 노드 하나만 사라지는 이 경우를 못 잡는다. `""` 와 `" "` 는 보이지 않는 한 바이트 차이인데 결과가 정반대였다 — 게다가 `empty_xml` 의 안내가 "노드를 지우려면 `delete` 를 쓸 것"이라, 그걸 읽고 `" "` 로 재시도한 에이전트가 바로 그 조용한 삭제를 얻는다.
+
+규칙: **`replaceRaw` 의 조각은 요소를 하나 이상 담아야 한다.** 공백·주석·텍스트·처리명령만 있는 조각은 거절한다. 이유는 `empty_xml` 하나다 — §3 은 "처방이 다르면 이유를 나눈다"인데 이 입력들의 처방은 전부 같다("진짜 내용을 주거나 `delete` 를 써라").
+
+요소 유무는 `encoding/xml` 로 토큰만 훑어 첫 `StartElement` 에서 멈춰 본다. 재직렬화가 아니고, `xmlscan.Scan` 도 쓰지 않는다 — 조각은 최상위 요소가 여럿일 수 있는데(`<w:p/><w:p/>`) Scan 은 루트 경로를 하나만 부여해 둘째를 경로 충돌로 거절한다. 요소를 만나기 전에 디코더가 깨지는 조각은 여기서 답하지 않고 재스캔의 `invalid_xml` 에 맡긴다 — "요소가 없다"는 문법이 깨진 입력을 잘못 설명하는 말이다.
+
+**결과: `empty_part` 는 CLI 로 도달 불가가 된다.** 파트를 노드 0개로 만드는 길이 둘뿐인데 둘 다 앞에서 막히기 때문이다(요소를 담은 `replaceRaw` + `delete_root` 사전 거절). 그래도 지우지 않는다 — 내용을 지우는 경로의 마지막 그물이고, 도달 불가는 앞의 두 검사에 의존하는 조건부 사실이다. 대신 시험을 종단 경로에서 술어 직접 호출로 옮겼다(`apply_internal_test.go`). 아무도 시험할 수 없는 그물은 아무도 믿을 수 없다.
+
 ## §4 불변식
 
 | | |
 |---|---|
-| **P1 (명시성)** | 삭제는 `delete` 로만 일어난다. 다른 어떤 연산·필드 조합으로도 노드가 사라지지 않는다 — 파트를 통째로 비우는 결과는 `empty_part` 가 막는다 (§3.1) |
+| **P1 (명시성)** | 삭제는 `delete` 로만 일어난다. 다른 어떤 연산·필드 조합으로도 노드가 사라지지 않는다 — `replaceRaw` 의 조각은 요소를 하나 이상 담아야 하고(§3.3), 파트를 통째로 비우는 결과는 `empty_part` 가 막는다 (§3.1) |
 | **P2 (필드 정합)** | 연산이 안 쓰는 필드도, 빠뜨린 필드도 거절한다. 단 `setText` 의 `""` 는 정당한 값이다 |
 | **P3 (전부 아니면 전무)** | 기존 계약 유지 — 거절 시 출력 파일이 생기지 않는다 |
 | **I2 (국소성)** | 삭제 후에도 손대지 않은 엔트리는 압축 바이트까지 동일하다 |
