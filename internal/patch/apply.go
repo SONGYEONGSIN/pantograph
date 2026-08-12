@@ -180,8 +180,26 @@ func checkFields(op Op) *Error {
 			return &Error{Path: op.Path, Reason: "unused_field",
 				Detail: "delete 는 text·xml 을 쓰지 않는다 — 지울 노드는 path 로만 지목한다"}
 		}
+	default:
+		// 연산 이름 판정도 경로 조회보다 먼저 한다. §3.2 가 필드에 대해 세운
+		// 논증이 그대로 적용된다 — 이름이 틀렸다는 건 경로가 존재하든 말든
+		// 사실이고, path_not_found 만 보여주면 사용자는 경로를 고쳐 재시도한
+		// 뒤에야 이름이 틀렸음을 알게 된다.
+		e := unknownOpError(op)
+		return &e
 	}
 	return nil
+}
+
+// unknownOpError 는 알 수 없는 연산의 거절이다. checkFields 와 spliceOne 의
+// 백스톱이 같은 문구를 쓰도록 한 곳에 둔다 — 두 벌로 두면 연산을 늘릴 때
+// 한쪽만 고쳐져 같은 실수에 두 답이 나온다.
+func unknownOpError(op Op) Error {
+	return Error{
+		Path:   op.Path,
+		Reason: "unknown_op",
+		Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw | delete)", op.Op),
+	}
 }
 
 // hasElement 는 조각에 요소가 하나라도 있는지 본다. 첫 StartElement 에서 멈춘다.
@@ -319,11 +337,12 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 				path: op.Path,
 			})
 		default:
-			errs = append(errs, Error{
-				Path:   op.Path,
-				Reason: "unknown_op",
-				Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw | delete)", op.Op),
-			})
+			// checkFields 가 먼저 걸러 여기 닿지 않는다. 그래도 남긴다:
+			// 새 연산을 checkFields 의 case 에만 더하고 이 switch 에 빠뜨리면
+			// 그 op 은 스플라이스도 에러도 없이 조용한 무동작이 되고, 도구가
+			// 하지 않은 일을 ok:true 로 보고한다 — 이 저장소가 반복해서
+			// 처벌해 온 실패 부류 그대로다.
+			errs = append(errs, unknownOpError(op))
 		}
 	}
 	if len(errs) > 0 {

@@ -395,6 +395,27 @@ func TestUnknownOpRejected(t *testing.T) {
 	}
 }
 
+// TestUnknownOpPrecedesPathLookup 은 이름도 틀리고 경로도 틀린 op 에서
+// unknown_op 이 먼저 나오는지 본다.
+//
+// 설계 §3.2 가 필드 검사에 대해 세운 논증이 연산 이름에도 그대로 적용된다:
+// 연산 이름이 틀렸다는 건 경로가 존재하든 말든 사실이고, path_not_found 만
+// 보여주면 사용자는 경로를 고쳐 재시도한 뒤에야 이름이 틀렸음을 알게 된다.
+func TestUnknownOpPrecedesPathLookup(t *testing.T) {
+	// 문단 하나짜리 픽스처 — p[99] 는 존재하지 않는다.
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "setProps", Part: "word/document.xml", Path: "document/body[1]/p[99]"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unknown_op" {
+		t.Fatalf("이름도 경로도 틀린 op 인데 unknown_op 이 아니다(연산 이름 검사가 경로 조회보다 먼저 돌지 않는다): %+v", errs)
+	}
+}
+
 // TestBrokenXMLIsInputError 는 재스캔 실패가 **입력 오류**로 보고되는지 본다.
 //
 // 결함은 전적으로 호출자가 준 XML 에 있다. 이것을 내부 오류(코드 2, stderr, 경로
