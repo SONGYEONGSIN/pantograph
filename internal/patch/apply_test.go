@@ -1077,3 +1077,48 @@ func TestReplaceRawWithEmptyXMLRejected(t *testing.T) {
 		t.Fatalf("거절됐는데 문단이 사라졌다: %s", content)
 	}
 }
+
+// TestFieldCheckPrecedesPathLookup 은 checkFields 가 tree.Lookup 보다 먼저
+// 도는지 잠근다 (설계 §3.2).
+//
+// 이 순서는 우연이 아니라 의도된 진단 품질 결정이다: 필드도 빠뜨리고 경로도
+// 틀린 op 을 주면, path_not_found 가 아니라 필드 사유(missing_text/missing_xml)
+// 가 나야 한다. 순서가 뒤집혀도(checkFields 를 tree.Lookup 뒤로 옮겨도) 전체
+// 스위트는 초록으로 남는다 — 어느 기존 테스트도 "두 가지가 동시에 틀린" op 을
+// 주지 않기 때문이다. 그 드리프트가 실제로 벌어지면 사용자는 path_not_found
+// 를 보고 경로부터 고쳐 재시도하고, 그제서야(두 번째 시도에서) 진짜 원인이
+// 필드 누락이었음을 알게 된다 — 이 테스트가 막는 것이 정확히 그 시나리오다.
+func TestFieldCheckPrecedesPathLookup(t *testing.T) {
+	cases := []struct {
+		name   string
+		op     patch.Op
+		reason string
+	}{
+		{
+			name:   "setText",
+			op:     patch.Op{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[99]/r[1]/t[1]"},
+			reason: "missing_text",
+		},
+		{
+			name:   "replaceRaw",
+			op:     patch.Op{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[99]"},
+			reason: "missing_xml",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// 문단 하나짜리 픽스처 — p[99] 는 존재하지 않는다.
+			p := open(t, testutil.MinimalDocx([]string{"제목"}))
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops:  []patch.Op{c.op},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != c.reason {
+				t.Fatalf("필드도 경로도 틀린 op 인데 사유가 %s 가 아니다(필드 검사가 경로 조회보다 먼저 돌지 않는다): %+v", c.reason, errs)
+			}
+		})
+	}
+}
