@@ -546,9 +546,15 @@ func TestApplyRejectsRawWithoutXML(t *testing.T) {
 	}
 	outPath := filepath.Join(dir, "out.docx")
 
-	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
 	if code != exitInput {
-		t.Fatalf("xml 없는 replaceRaw 인데 exit=%d (기대 %d)", code, exitInput)
+		t.Fatalf("xml 없는 replaceRaw 인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "missing_xml") {
+		t.Fatalf("stdout 에 missing_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
 	}
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
 		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
@@ -570,9 +576,15 @@ func TestApplyRejectsRawWithEmptyXML(t *testing.T) {
 	}
 	outPath := filepath.Join(dir, "out.docx")
 
-	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
 	if code != exitInput {
-		t.Fatalf("빈 xml 인 replaceRaw 인데 exit=%d (기대 %d)", code, exitInput)
+		t.Fatalf("빈 xml 인 replaceRaw 인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "empty_xml") {
+		t.Fatalf("stdout 에 empty_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
 	}
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
 		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
@@ -981,9 +993,15 @@ func TestApplyRejectsSetTextWithXMLField(t *testing.T) {
 	}
 	outPath := filepath.Join(dir, "out.docx")
 
-	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
 	if code != exitInput {
-		t.Fatalf("setText 에 xml 을 준 패치인데 exit=%d (기대 %d)", code, exitInput)
+		t.Fatalf("setText 에 xml 을 준 패치인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "unused_field") {
+		t.Fatalf("stdout 에 unused_field 가 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
 	}
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
 		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
