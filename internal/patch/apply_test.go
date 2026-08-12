@@ -937,27 +937,114 @@ func TestDeleteOverlappingSetTextRejected(t *testing.T) {
 	}
 }
 
-// TestEmptyPartRejected 는 루트를 빈 XML 로 치환해 모든 요소를 제거하려는 시도를
-// empty_part 로 거절하는지 본다.
+// TestReplaceRawWithoutElementRejected 는 요소가 하나도 없는 조각으로 하는
+// replaceRaw 를 거절하는지 본다.
 //
-// 막지 않으면 replaceRaw 가 문서 전체를 파괴하고 ok:true 를 내보낸다.
-func TestEmptyPartRejected(t *testing.T) {
-	src := testutil.MinimalDocx([]string{"제목", "본문"})
-	p := open(t, src)
+// 전체 브랜치 리뷰가 실측한 것: xml 이 " " · "<!-- gone -->" · "\n\t" 이면
+// 노드가 사라지고 ok:true 가 났다 (form-a.docx 문단 6→5, exit 0). empty_xml 은
+// xml=="" 만 봤고, empty_part 는 파트 전체가 비어야 발동하므로 둘 다 이 입력을
+// 놓쳤다. "" 와 " " 는 보이지 않는 한 바이트 차이인데 결과가 정반대였다 —
+// empty_xml 의 안내("지우려면 delete 를 쓸 것")를 읽고 " " 로 재시도한
+// 에이전트가 바로 그 조용한 삭제를 얻었다.
+//
+// 이유를 새로 만들지 않고 empty_xml 을 그대로 쓴다. 이 저장소의 규칙은
+// "처방이 다르면 이유를 나눈다"인데 여기서는 역이 성립한다 — 이 입력들의
+// 처방은 전부 같다("진짜 내용을 주거나 delete 를 써라").
+func TestReplaceRawWithoutElementRejected(t *testing.T) {
+	for _, c := range []struct{ name, xml string }{
+		{"공백 한 칸", " "},
+		{"주석", "<!-- gone -->"},
+		{"개행과 탭", "\n\t"},
+		{"텍스트", "지운다"},
+		{"처리 명령", `<?pi 데이터?>`},
+		{"CDATA", `<![CDATA[<w:p/>]]>`},
+		{"루트를 공백으로", "   "}, // 파트 전체를 비우려는 시도도 같은 규칙에 걸린다
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := "document/body[1]/p[2]"
+			if c.name == "루트를 공백으로" {
+				path = "document"
+			}
+			src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+			p := open(t, src)
 
-	// 루트를 공백만으로 치환하면 결과에 요소가 하나도 없어진다.
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+					Path: path, XML: patch.Str(c.xml)}},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != "empty_xml" {
+				t.Fatalf("요소 없는 조각이 empty_xml 로 거절되지 않았다: %+v", errs)
+			}
+			if !strings.Contains(errs[0].Detail, "delete") {
+				t.Fatalf("안내가 delete 를 가리키지 않는다: %q", errs[0].Detail)
+			}
+
+			// 문서는 손대지 않아야 한다 — 원자성.
+			got, err := p.Bytes()
+			if err != nil {
+				t.Fatalf("Bytes: %v", err)
+			}
+			if !bytes.Equal(src, got) {
+				t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+			}
+		})
+	}
+}
+
+// TestReplaceRawWithMultipleTopLevelElementsAccepted 는 최상위 요소가 여럿인
+// 조각이 정당한 입력임을 잠근다.
+//
+// **이 테스트에는 RED 가 없다** — 요소 유무 검사가 과잉 교정되는 것을 막는
+// 경계 시험이다. 검사를 xmlscan.Scan 으로 구현하면 둘째 요소가 첫째와 같은
+// 루트 경로를 받아 "경로 충돌" 로 거절되고, 문단 하나를 둘로 늘리는 정당한
+// 패치가 막힌다.
+func TestReplaceRawWithMultipleTopLevelElementsAccepted(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "둘로 나뉠 문단"}))
+
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document", XML: patch.Str("   ")}},
+		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[2]",
+			XML:  patch.Str(`<w:p><w:r><w:t>앞</w:t></w:r></w:p><w:p><w:r><w:t>뒤</w:t></w:r></w:p>`)}},
+	})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("최상위 요소가 여럿인 조각이 거절됐다: err=%v errs=%+v", err, errs)
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Contains(content, []byte("앞")) || !bytes.Contains(content, []byte("뒤")) {
+		t.Fatalf("두 요소가 다 들어가지 않았다: %s", content)
+	}
+}
+
+// TestReplaceRawWithStrayEndTagIsInvalidXML 은 요소를 만나기 전에 디코더가
+// 깨지는 조각의 사유를 잠근다.
+//
+// 요소 유무 검사는 이런 입력에 답하지 않는다 — 문법이 깨진 조각에 "요소가
+// 없다"고 답하면 입력을 잘못 설명하는 셈이다. 균형 잡힌 구간을 균형 잡히지
+// 않은 조각으로 바꾸면 결과 전체가 반드시 깨지므로, 스플라이스 후 재스캔이
+// invalid_xml 로 정확히 잡는다.
+func TestReplaceRawWithStrayEndTagIsInvalidXML(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+	p := open(t, src)
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[2]", XML: patch.Str(`</w:p>`)}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if len(errs) != 1 || errs[0].Reason != "empty_part" {
-		t.Fatalf("빈 파트가 empty_part 로 거절되지 않았다: %+v", errs)
+	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
+		t.Fatalf("깨진 조각이 invalid_xml 로 거절되지 않았다: %+v", errs)
 	}
-
-	// 문서는 손대지 않아야 한다 — 원자성.
 	got, err := p.Bytes()
 	if err != nil {
 		t.Fatalf("Bytes: %v", err)

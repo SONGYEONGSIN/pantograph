@@ -591,29 +591,49 @@ func TestApplyRejectsRawWithEmptyXML(t *testing.T) {
 	}
 }
 
-// TestApplyRejectsEmptyPart 는 루트를 빈 XML 로 치환해 모든 요소를 지우려는
-// replaceRaw 를 거절하는지 본다. CLI 에서도 출력 파일을 만들지 않는지 확인한다.
-func TestApplyRejectsEmptyPart(t *testing.T) {
-	dir := t.TempDir()
-	inPath := filepath.Join(dir, "in.docx")
-	src := testutil.MinimalDocx([]string{"지켜져야 할 텍스트"})
-	if err := os.WriteFile(inPath, src, 0o644); err != nil {
-		t.Fatalf("입력 파일 쓰기 실패: %v", err)
-	}
-	patchPath := filepath.Join(dir, "patch.json")
-	// 루트를 공백만으로 치환 — 결과에 요소가 하나도 없음
-	patch := `{"ops":[{"op":"replaceRaw","path":"document","xml":"   "}]}`
-	if err := os.WriteFile(patchPath, []byte(patch), 0o644); err != nil {
-		t.Fatalf("패치 파일 쓰기 실패: %v", err)
-	}
-	outPath := filepath.Join(dir, "out.docx")
+// TestApplyRejectsRawWithoutElement 는 요소가 하나도 없는 조각으로 하는
+// replaceRaw 를 CLI 에서 거절하는지 본다.
+//
+// 앞 세 payload 는 전체 브랜치 리뷰가 실측한 그대로다 — 세 경우 모두 문단이
+// 사라지고 exit 0 + 출력 파일이 생겼다. 넷째(루트를 공백으로)는 예전에
+// empty_part 로 걸리던 입력인데, 요소 규칙이 생기면서 더 이른 자리에서
+// empty_xml 로 걸린다. 사유까지 보는 이유: 종료 코드와 출력 파일 유무만 보면
+// 어느 검사가 잡았는지 구별되지 않아, 규칙을 지워도 초록이 유지된다.
+func TestApplyRejectsRawWithoutElement(t *testing.T) {
+	for _, c := range []struct{ name, path, xml string }{
+		{"공백 한 칸", "document/body[1]/p[2]", " "},
+		{"주석", "document/body[1]/p[2]", "<!-- gone -->"},
+		{"개행과 탭", "document/body[1]/p[2]", `\n\t`},
+		{"루트를 공백으로", "document", "   "},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			inPath := filepath.Join(dir, "in.docx")
+			src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+			if err := os.WriteFile(inPath, src, 0o644); err != nil {
+				t.Fatalf("입력 파일 쓰기 실패: %v", err)
+			}
+			patchPath := filepath.Join(dir, "patch.json")
+			body := fmt.Sprintf(`{"ops":[{"op":"replaceRaw","path":%q,"xml":"%s"}]}`, c.path, c.xml)
+			if err := os.WriteFile(patchPath, []byte(body), 0o644); err != nil {
+				t.Fatalf("패치 파일 쓰기 실패: %v", err)
+			}
+			outPath := filepath.Join(dir, "out.docx")
 
-	code := cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
-	if code != exitInput {
-		t.Fatalf("빈 파트 거절인데 exit=%d (기대 %d)", code, exitInput)
-	}
-	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
-		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+			var code int
+			stdout := captureStdout(t, func() {
+				code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+			})
+			if code != exitInput {
+				t.Fatalf("요소 없는 조각인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+			}
+			if !strings.Contains(stdout, "empty_xml") {
+				t.Fatalf("stdout 에 empty_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+			}
+			if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+				t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+			}
+		})
 	}
 }
 

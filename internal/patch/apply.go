@@ -2,7 +2,9 @@ package patch
 
 import (
 	"bytes"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -163,9 +165,15 @@ func checkFields(op Op) *Error {
 			return &Error{Path: op.Path, Reason: "missing_xml",
 				Detail: "replaceRaw 에 xml 이 없다"}
 		}
-		if *op.XML == "" {
+		// 조각은 요소를 하나 이상 담아야 한다. 빈 문자열만 보면 " " · 주석 ·
+		// 텍스트 같은 요소 없는 조각이 그대로 통과해 노드를 지우고 ok:true 를
+		// 낸다 — "" 와 " " 는 보이지 않는 한 바이트 차이인데 결과가 정반대였다.
+		//
+		// 이유를 나누지 않는다: 이 입력들의 처방이 전부 같다
+		// ("진짜 내용을 주거나 delete 를 써라").
+		if ok, err := hasElement(*op.XML); !ok && err == nil {
 			return &Error{Path: op.Path, Reason: "empty_xml",
-				Detail: "replaceRaw 의 xml 이 비었다 — 노드를 지우려면 delete 를 쓸 것"}
+				Detail: "replaceRaw 의 xml 에 요소가 하나도 없다 — 노드를 지우려면 delete 를 쓸 것"}
 		}
 	case "delete":
 		if op.Text != nil || op.XML != nil {
@@ -174,6 +182,34 @@ func checkFields(op Op) *Error {
 		}
 	}
 	return nil
+}
+
+// hasElement 는 조각에 요소가 하나라도 있는지 본다. 첫 StartElement 에서 멈춘다.
+//
+// **읽기지 재직렬화가 아니다** — 토큰만 훑고 조각의 바이트는 그대로 스플라이스된다.
+//
+// xmlscan.Scan 을 쓰지 않는 이유: 조각은 최상위 요소가 여럿일 수 있는데
+// (예: 문단 하나를 둘로 늘리는 `<w:p/><w:p/>`) Scan 은 루트 별칭 하나만 부여해
+// 둘째를 경로 충돌로 거절한다. 정당한 패치가 막힌다.
+//
+// 요소를 만나기 전에 디코더가 깨지면 (false, err) 를 낸다. 호출자는 그때
+// 거절하지 않는다 — 문법이 깨진 조각에 "요소가 없다"고 답하면 입력을 잘못
+// 설명하는 셈이고, 균형 잡힌 구간을 균형 잡히지 않은 조각으로 바꾼 결과는
+// 반드시 깨지므로 스플라이스 후 재스캔이 invalid_xml 로 정확히 잡는다.
+func hasElement(frag string) (bool, error) {
+	dec := xml.NewDecoder(strings.NewReader(frag))
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if _, ok := tok.(xml.StartElement); ok {
+			return true, nil
+		}
+	}
 }
 
 // spliceOne 은 파트 하나에 그 파트의 op 들을 적용해 스플라이스된 버퍼를 낸다.
@@ -369,6 +405,14 @@ func badResult(out []byte, rootAlias string) (reason, detail string) {
 		return "invalid_xml", fmt.Sprintf("적용 결과가 유효한 XML 이 아니다 (문서는 손대지 않았다): %v", err)
 	}
 	// Scan 이 성공해도 요소가 하나도 없으면 파트가 성립하지 않는다.
+	//
+	// **이 갈래는 지금 CLI 입력으로는 도달할 수 없다.** 논증: 파트를 노드 0개로
+	// 만드는 길은 둘뿐인데 둘 다 앞에서 막힌다 — replaceRaw 의 조각은 요소를
+	// 하나 이상 담아야 하고(checkFields 의 empty_xml), 루트 delete 는
+	// delete_root 가 먼저 거절한다. 그래도 지우지 않는다: 이건 내용을 지우는
+	// 경로의 마지막 그물이고, "지금 도달 불가"는 "불필요"가 아니라 앞의 두
+	// 검사에 의존하는 조건부 사실이다. 둘 중 하나가 느슨해지면 이 그물이 유일한
+	// 방어가 된다. 시험은 apply_internal_test.go 가 술어를 직접 불러서 한다.
 	if len(tree.Nodes) == 0 {
 		return "empty_part", "적용 결과에 요소가 하나도 없다 (문서는 손대지 않았다)"
 	}
