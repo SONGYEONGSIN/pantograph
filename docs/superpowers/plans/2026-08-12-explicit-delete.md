@@ -663,7 +663,7 @@ func TestUnusedFieldRejected(t *testing.T) {
 }
 
 // TestUnusedFieldWinsOverMissingField 는 두 결함이 겹칠 때 어느 이유를 내는지
-// 고정한다 (설계 §3.1).
+// 고정한다 (설계 §3.2).
 //
 // {"op":"setText","xml":…} 는 text 도 없고 안 쓰는 필드도 있다. 사용자가 실제로
 // 한 실수는 "필드를 잘못 골랐다"이지 "값을 빠뜨렸다"가 아니므로 unused_field 를
@@ -686,7 +686,7 @@ func TestUnusedFieldWinsOverMissingField(t *testing.T) {
 }
 
 // TestUnusedFieldCheckedBeforePathLookup 은 경로까지 틀린 패치에서 필드 오류를
-// 먼저 내는지 본다 (설계 §3.1). 경로 오류를 먼저 내면 사용자는 경로를 고친 뒤
+// 먼저 내는지 본다 (설계 §3.2). 경로 오류를 먼저 내면 사용자는 경로를 고친 뒤
 // 두 번째 오류를 만난다.
 func TestUnusedFieldCheckedBeforePathLookup(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
@@ -748,7 +748,7 @@ go test ./cmd/panto/ -run 'TestApplyRejectsSetTextWithXMLField' -count=1
 
 - [ ] **Step 3: `checkFields` 에 안 쓰는 필드 검사를 더한다**
 
-Task 2 에서 만든 `checkFields` 를 고친다. **안 쓰는 필드를 빠뜨린 필드보다 먼저 본다** (설계 §3.1):
+Task 2 에서 만든 `checkFields` 를 고친다. **안 쓰는 필드를 빠뜨린 필드보다 먼저 본다** (설계 §3.2):
 
 ```go
 // checkFields 는 연산과 필드가 맞는지 본다.
@@ -758,7 +758,7 @@ Task 2 에서 만든 `checkFields` 를 고친다. **안 쓰는 필드를 빠뜨�
 // 빠뜨린 패치가 조용히 내용을 지운다 (설계 §1).
 //
 // 순서가 진단의 품질이다: 안 쓰는 필드를 먼저 본다. setText 에 xml 만 준
-// 입력은 "값을 빠뜨렸다"가 아니라 "필드를 잘못 골랐다"이기 때문이다 (설계 §3.1).
+// 입력은 "값을 빠뜨렸다"가 아니라 "필드를 잘못 골랐다"이기 때문이다 (설계 §3.2).
 func checkFields(op Op) *Error {
 	switch op.Op {
 	case "setText":
@@ -855,7 +855,7 @@ PR #3 의 DisallowUnknownFields 는 모르는 키만 막고 xml 은 Op 가 아�
 | §2.1 `delete` 연산 | Task 1 |
 | §2.2 `*string` 전환 + 판정표 6행 | Task 2 (4행) + Task 3 (2행: unused_field) |
 | §3 이유 5개 | `delete_root`(T1), `missing_text`·`missing_xml`·`empty_xml`(T2), `unused_field`(T3) |
-| §3.1 검사 순서 | Task 2 Step 5(경로 조회보다 먼저), Task 3 Step 3(안 쓰는 필드 먼저) + 전용 테스트 2개 |
+| §3.2 검사 순서 | Task 2 Step 5(경로 조회보다 먼저), Task 3 Step 3(안 쓰는 필드 먼저) + 전용 테스트 2개 |
 | §4 P1 명시성 | Task 2·3 의 CLI 회귀 3개 — §1 세 명령 그대로 |
 | §4 P2 필드 정합 | Task 2·3 단위 테스트 |
 | §4 P3 전부 아니면 전무 | CLI 테스트가 출력 파일 미생성을 본다 |
