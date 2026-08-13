@@ -1195,7 +1195,7 @@ func swallowFixture(tail string) []byte {
 func TestReplaceRawWithIncompleteFragmentRejected(t *testing.T) {
 	for _, c := range []struct{ name, tail, xml, wantInDetail string }{
 		{"미완결 주석 — 문서가 --> 를 준다", `-->`, `<w:p/><!--`, "EOF"},
-		{"미완결 CDATA — 문서가 ]]> 를 준다", `<![CDATA[꼬리]]>`, `<w:p/><![CDATA[`, "CDATA"},
+		{"미완결 CDATA — 문서가 ]]> 를 준다", `<![CDATA[꼬리]]>`, `<w:p/><![CDATA[`, "EOF in CDATA"},
 		{"미완결 시작 태그 — 종결자 없음", ``, `<w:p/><w:r`, "EOF"},
 		{"요소도 없이 끊긴 조각", `-->`, `<!--`, "EOF"},
 		{"끊긴 엔티티 — 문서가 ; 를 준다", `;꼬리`, `<w:p/>&amp`, "EOF"},
