@@ -676,6 +676,56 @@ func TestApplyRejectsRawClosingUnopenedElement(t *testing.T) {
 	}
 }
 
+// TestApplyRejectsIncompleteFragment 는 어휘적으로 끝나지 않는 조각을 CLI 에서
+// 거절하는지 본다.
+//
+// 픽스처와 payload 는 실측된 그대로다. 본문 끝의 `-->` 는 문자 데이터로 적법한
+// XML 이고 적법한 OOXML 이다:
+//
+//	문서: <w:body> p(문단1) p(문단2) p(문단3) --></w:body>
+//	패치: {"op":"replaceRaw","path":"document/body[1]/p[2]","xml":"<w:p/><!--"}
+//	→ exit 0 · {"ok":true} · 출력 파일 생성
+//	→ 스캔된 문단 3→2, 텍스트 ['문단1','문단2','문단3'] → ['문단1']
+//
+// 조각이 토큰 도중에 끊기면 스플라이스 뒤의 **문서 바이트가 그 미완결 구성을
+// 이어받아** 종결자까지를 삼킨다. 삼킨 구간이 균형 잡혀 있으면 결과가
+// well-formed 하고 노드도 0 개가 아니라 재스캔이 통과시킨다.
+//
+// 바이트로는 안 보이는 삭제다 — 삼킨 문단은 파일에 그대로 있고 주석이 됐을
+// 뿐이다. 그래서 출력 파일 유무로 잰다: 거절되면 애초에 파일이 없다.
+func TestApplyRejectsIncompleteFragment(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.DocxWithBody(
+		`<w:p><w:r><w:t>문단1</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>문단2</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>문단3</w:t></w:r></w:p>-->`)
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	body := fmt.Sprintf(`{"ops":[{"op":"replaceRaw","path":"document/body[1]/p[2]","xml":%q}]}`,
+		`<w:p/><!--`)
+	if err := os.WriteFile(patchPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
+	if code != exitInput {
+		t.Fatalf("미완결 조각인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "incomplete_xml") {
+		t.Fatalf("stdout 에 incomplete_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
 // TestTmplFillNullValue 는 데이터 JSON 의 null 이 값이 아니라 부재로
 // 취급되는지 본다.
 //

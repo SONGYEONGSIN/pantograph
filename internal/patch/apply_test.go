@@ -1051,33 +1051,36 @@ func TestReplaceRawWithMultipleTopLevelElementsAccepted(t *testing.T) {
 	}
 }
 
-// TestReplaceRawWithBrokenSyntaxIsInvalidXML 은 요소를 만나기 전에 디코더가
-// 깨지는 조각의 사유를 잠근다.
+// TestReplaceRawWithMismatchedNamesIsInvalidXML 은 **이름이 짝지지 않는** 조각의
+// 사유를 잠근다 — 조각 검사가 일부러 재스캔에 남긴 갈래다.
 //
-// 요소 유무 검사는 이런 입력에 답하지 않는다 — 문법이 깨진 조각에 "요소가
-// 없다"고 답하면 입력을 잘못 설명하는 셈이다. 균형 잡힌 구간을 균형 잡히지
-// 않은 조각으로 바꾸면 결과 전체가 반드시 깨지므로, 스플라이스 후 재스캔이
-// invalid_xml 로 정확히 잡는다.
+// `<w:p></w:r>` 는 조각 검사 셋을 전부 통과한다: 끝까지 토큰화되고(RawToken 은
+// 짝을 안 본다), 깊이가 음수로 안 가고, 요소도 있다. 그럴 수밖에 없다 —
+// 조각의 종료 태그가 짝지어야 할 상대는 조각 안이 아니라 스플라이스 지점의
+// 조상일 수 있어서, 이름 판정은 결과 전체를 보는 재스캔의 몫이다. 이 테스트가
+// 그 분업이 실제로 작동함을 잠근다.
 //
-// payload 가 `</w:p>` 에서 바뀐 이유: 종료 태그는 더 이상 디코더를 깨뜨리지
-// 않는다. 깊이 검사가 RawToken 으로 훑으면서 그것을 토큰으로 받아 세고
-// unbalanced_xml 로 거절하기 때문이다 (그 갈래는
-// TestReplaceRawClosingUnopenedElementRejected 가 잡는다). 이 테스트가 지키는
-// 것은 "토큰이 되기도 전에 깨지는 조각"이므로 어휘적으로 깨진 입력을 쓴다.
-func TestReplaceRawWithBrokenSyntaxIsInvalidXML(t *testing.T) {
+// 이 테스트의 payload 이력이 곧 이 슬라이스의 이력이다. `</w:p>` 였다가
+// (종료 태그를 토큰으로 세게 되면서 unbalanced_xml 로 옮겨감), `<w:p` 였다가
+// (미완결 조각을 사전 거절하게 되면서 incomplete_xml 로 옮겨감), 이제
+// 이름 불일치다. 앞의 둘은 각자의 테스트가 잡는다
+// (TestReplaceRawClosingUnopenedElementRejected /
+// TestReplaceRawWithIncompleteFragmentRejected). 지켜야 할 것은 payload 가
+// 아니라 **재스캔이 아직 담당하는 갈래가 시험된다**는 사실이다.
+func TestReplaceRawWithMismatchedNamesIsInvalidXML(t *testing.T) {
 	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
 	p := open(t, src)
 
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
-			Path: "document/body[1]/p[2]", XML: patch.Str(`<w:p`)}},
+			Path: "document/body[1]/p[2]", XML: patch.Str(`<w:p></w:r>`)}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
-		t.Fatalf("깨진 조각이 invalid_xml 로 거절되지 않았다: %+v", errs)
+		t.Fatalf("이름이 짝지지 않는 조각이 invalid_xml 로 거절되지 않았다: %+v", errs)
 	}
 	got, err := p.Bytes()
 	if err != nil {
@@ -1133,6 +1136,87 @@ func TestReplaceRawClosingUnopenedElementRejected(t *testing.T) {
 			}
 			// 안내가 규칙을 말해야 한다 — "닫아라"만으로는 무엇이 잘못인지 모른다.
 			if !strings.Contains(errs[0].Detail, "열지 않은") {
+				t.Fatalf("안내가 규칙을 설명하지 않는다: %q", errs[0].Detail)
+			}
+
+			// 문서는 손대지 않아야 한다 — 원자성.
+			got, err := p.Bytes()
+			if err != nil {
+				t.Fatalf("Bytes: %v", err)
+			}
+			if !bytes.Equal(src, got) {
+				t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+			}
+		})
+	}
+}
+
+// swallowFixture 는 **문서 자신이 종결자를 갖는** 본문을 만든다.
+//
+// tail 은 마지막 문단 뒤에 오는 문자 데이터다. `-->` 도 CDATA 섹션도 본문에
+// 두는 것이 적법한 XML 이고 적법한 OOXML 이다 — 조각이 어휘적으로 끊기면
+// 스플라이스 뒤의 이 바이트들이 종결자 노릇을 한다.
+func swallowFixture(tail string) []byte {
+	return testutil.DocxWithBody(
+		`<w:p><w:r><w:t>문단1</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>문단2</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>문단3</w:t></w:r></w:p>` + tail)
+}
+
+// TestReplaceRawWithIncompleteFragmentRejected 는 자기 바이트만으로 끝까지
+// 토큰화되지 않는 조각을 거절하는지 본다.
+//
+// 실측된 결함 (문단 3개 + 꼬리 `-->`):
+//
+//	{"op":"replaceRaw","path":"document/body[1]/p[2]","xml":"<w:p/><!--"}
+//	→ {"ok":true} exit 0, 출력 파일 생성
+//	→ 스캔된 문단 3→2, 텍스트 ['문단1','문단2','문단3'] → ['문단1']
+//
+// 왜 앞의 두 검사를 빠져나갔나: 토큰 도중에 끊기면 토큰화가 거기서 멈춘다.
+// 그때까지 깊이는 음수로 안 갔고(§3.4) 요소도 하나 봤으므로(§3.3) 두 검사 모두
+// "문제 없다"고 답하고 판정이 스플라이스 후 재스캔으로 넘어간다. 그런데
+// 스플라이스 뒤에는 **문서 바이트가 그 미완결 구성을 이어받아** 종결자까지를
+// 삼킨다. 삼킨 구간이 균형 잡혀 있으면 결과는 well-formed 하고 노드도 0 개가
+// 아니라 재스캔의 두 그물을 모두 통과한다 — 문단 하나가 주석 안으로 들어간 채로.
+//
+// **바이트를 세면 아무것도 안 보인다.** 삼킨 내용은 여전히 파일 안에 있다.
+// 사라진 것은 파싱되는 노드다. 그래서 이 테스트는 원자성(패키지 바이트 불변)을
+// 본다 — 거절되면 애초에 아무 일도 일어나지 않는다.
+//
+// 셋째 케이스에는 종결자가 없다. 그 입력은 전에도 (스플라이스 후 재스캔의)
+// invalid_xml 로 막혔지만, 조각은 뒤에 무엇이 올지 모르므로 판정이 문서에 따라
+// 갈려서는 안 된다 — 한 규칙이 이 부류 전체를 같은 사유로 소유한다.
+//
+// 넷째 케이스는 검사 순서를 잠근다. `<!--` 는 끊겼고 요소도 없어 두 검사에
+// 모두 걸리는데, 사용자가 실제로 한 일은 "내용을 안 줬다"가 아니라 "쓰다가
+// 끊었다"이다. empty_xml 을 내면 "지우려면 delete 를 써라"라고 안내하게 되는데,
+// 그건 이 입력에 대한 처방이 아니다 (§3 의 순서 논증 — `</w:p>` 가
+// unbalanced_xml 을 받는 것과 같은 이유).
+func TestReplaceRawWithIncompleteFragmentRejected(t *testing.T) {
+	for _, c := range []struct{ name, tail, xml string }{
+		{"미완결 주석 — 문서가 --> 를 준다", `-->`, `<w:p/><!--`},
+		{"미완결 CDATA — 문서가 ]]> 를 준다", `<![CDATA[꼬리]]>`, `<w:p/><![CDATA[`},
+		{"미완결 시작 태그 — 종결자 없음", ``, `<w:p/><w:r`},
+		{"요소도 없이 끊긴 조각", `-->`, `<!--`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := swallowFixture(c.tail)
+			p := open(t, src)
+
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+					Path: "document/body[1]/p[2]", XML: patch.Str(c.xml)}},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != "incomplete_xml" {
+				t.Fatalf("미완결 조각이 incomplete_xml 로 거절되지 않았다: %+v", errs)
+			}
+			// 안내가 규칙을 말해야 한다 — 증상("결과가 깨졌다")이 아니라
+			// 조각이 지켜야 할 조건을 말한다.
+			if !strings.Contains(errs[0].Detail, "조각 안에서") {
 				t.Fatalf("안내가 규칙을 설명하지 않는다: %q", errs[0].Detail)
 			}
 
