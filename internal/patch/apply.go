@@ -165,13 +165,36 @@ func checkFields(op Op) *Error {
 			return &Error{Path: op.Path, Reason: "missing_xml",
 				Detail: "replaceRaw 에 xml 이 없다"}
 		}
+		// 조각을 한 번 훑어 두 가지를 본다. 순서는 escapes 가 먼저다 —
+		// `</w:p>` 처럼 둘 다 걸리는 입력의 실제 결함은 "요소가 없다"가 아니라
+		// "바깥을 닫는다"이고, §3 은 처방이 다르면 이유를 나눈다.
+		elem, escapes, err := scanFragment(*op.XML)
+
+		// 조각은 자기가 열지 않은 요소를 닫을 수 없다.
+		//
+		// 이 검사가 없으면 `</w:body><w:body>` 같은 조각이 통과한다 (실측:
+		// form-a.docx 문단 6→5, ok:true, exit 0). 조각만 따로 보면 깨진
+		// 입력이지만, 그 종료 태그는 스플라이스 지점의 **진짜 조상**과 짝이
+		// 맞고 조각이 같은 요소를 다시 열어 스택 순증이 0 이다 — 결과가
+		// well-formed 하고 노드도 0 개가 아니라 재스캔의 두 그물을 모두 빠져
+		// 나간다. 노드 하나가 조용히 사라진 채로.
+		//
+		// 깊이가 음수로 내려가지 않는다는 것이 곧 바이트 스플라이스가 안전한
+		// 조건이다: 그런 조각은 자기 구간 밖의 구조에 손을 뻗을 수 없다.
+		// 반대로 깊이가 양수로 끝나는 조각(닫히지 않은 요소)은 바깥을 재구성
+		// 하지 않으므로 여기서 잡지 않는다 — 결과가 깨져 재스캔이 말한다.
+		if escapes {
+			return &Error{Path: op.Path, Reason: "unbalanced_xml",
+				Detail: "replaceRaw 의 xml 이 자기가 열지 않은 요소를 닫는다 — 조각은 대체할 구간 밖의 구조를 건드릴 수 없다. 조각 안에서 연 것만 닫을 것"}
+		}
+
 		// 조각은 요소를 하나 이상 담아야 한다. 빈 문자열만 보면 " " · 주석 ·
 		// 텍스트 같은 요소 없는 조각이 그대로 통과해 노드를 지우고 ok:true 를
 		// 낸다 — "" 와 " " 는 보이지 않는 한 바이트 차이인데 결과가 정반대였다.
 		//
 		// 이유를 나누지 않는다: 이 입력들의 처방이 전부 같다
 		// ("진짜 내용을 주거나 delete 를 써라").
-		if ok, err := hasElement(*op.XML); !ok && err == nil {
+		if !elem && err == nil {
 			return &Error{Path: op.Path, Reason: "empty_xml",
 				Detail: "replaceRaw 의 xml 에 요소가 하나도 없다 — 노드를 지우려면 delete 를 쓸 것"}
 		}
@@ -202,30 +225,51 @@ func unknownOpError(op Op) Error {
 	}
 }
 
-// hasElement 는 조각에 요소가 하나라도 있는지 본다. 첫 StartElement 에서 멈춘다.
+// scanFragment 는 조각을 한 번 훑어 두 가지를 답한다.
+//
+//	elem    — 요소가 하나라도 있는가
+//	escapes — 자기가 열지 않은 요소를 닫는가 (깊이가 한 번이라도 음수로 내려간다)
 //
 // **읽기지 재직렬화가 아니다** — 토큰만 훑고 조각의 바이트는 그대로 스플라이스된다.
+// 한 번만 훑는다: 두 물음의 답은 같은 토큰열에서 나온다.
+//
+// Token 이 아니라 RawToken 을 쓴다. Token 은 요소 짝을 검사해서, 빈 스택에서
+// 종료 태그를 만나면 **토큰 대신 오류**를 낸다 — 우리가 세야 할 바로 그 태그를
+// 볼 수가 없다. 앞 웨이브가 `</w:body><w:body>` 를 놓친 것이 정확히 이 때문이다.
+// RawToken 은 짝도 네임스페이스도 검사하지 않고 토큰만 준다. 짝 검사는 여기서
+// 할 일이 아니다 — 조각의 종료 태그가 짝지어야 할 상대는 조각 안이 아니라
+// 스플라이스 지점의 조상일 수 있고, 그 판정은 결과 전체를 보는 재스캔의 몫이다.
 //
 // xmlscan.Scan 을 쓰지 않는 이유: 조각은 최상위 요소가 여럿일 수 있는데
 // (예: 문단 하나를 둘로 늘리는 `<w:p/><w:p/>`) Scan 은 루트 별칭 하나만 부여해
 // 둘째를 경로 충돌로 거절한다. 정당한 패치가 막힌다.
 //
-// 요소를 만나기 전에 디코더가 깨지면 (false, err) 를 낸다. 호출자는 그때
-// 거절하지 않는다 — 문법이 깨진 조각에 "요소가 없다"고 답하면 입력을 잘못
-// 설명하는 셈이고, 균형 잡힌 구간을 균형 잡히지 않은 조각으로 바꾼 결과는
-// 반드시 깨지므로 스플라이스 후 재스캔이 invalid_xml 로 정확히 잡는다.
-func hasElement(frag string) (bool, error) {
+// 디코더가 깨지면 그 자리까지의 답과 함께 err 을 낸다. 호출자는 escapes 만
+// 그대로 쓰고 elem 으로는 거절하지 않는다 — 문법이 깨진 조각에 "요소가 없다"고
+// 답하면 입력을 잘못 설명하는 셈이고, 그런 조각은 결과를 반드시 깨뜨리므로
+// 스플라이스 후 재스캔이 invalid_xml 로 정확히 잡는다. escapes 를 err 보다
+// 먼저 믿는 이유: 깊이가 이미 음수로 내려간 것은 뒤에 무엇이 오든 뒤집히지
+// 않는 사실이다.
+func scanFragment(frag string) (elem, escapes bool, err error) {
 	dec := xml.NewDecoder(strings.NewReader(frag))
+	depth := 0
 	for {
-		tok, err := dec.Token()
+		tok, err := dec.RawToken()
 		if err == io.EOF {
-			return false, nil
+			return elem, false, nil
 		}
 		if err != nil {
-			return false, err
+			return elem, false, err
 		}
-		if _, ok := tok.(xml.StartElement); ok {
-			return true, nil
+		switch tok.(type) {
+		case xml.StartElement:
+			elem = true
+			depth++
+		case xml.EndElement:
+			depth--
+			if depth < 0 {
+				return elem, true, nil
+			}
 		}
 	}
 }

@@ -1051,21 +1051,27 @@ func TestReplaceRawWithMultipleTopLevelElementsAccepted(t *testing.T) {
 	}
 }
 
-// TestReplaceRawWithStrayEndTagIsInvalidXML 은 요소를 만나기 전에 디코더가
+// TestReplaceRawWithBrokenSyntaxIsInvalidXML 은 요소를 만나기 전에 디코더가
 // 깨지는 조각의 사유를 잠근다.
 //
 // 요소 유무 검사는 이런 입력에 답하지 않는다 — 문법이 깨진 조각에 "요소가
 // 없다"고 답하면 입력을 잘못 설명하는 셈이다. 균형 잡힌 구간을 균형 잡히지
 // 않은 조각으로 바꾸면 결과 전체가 반드시 깨지므로, 스플라이스 후 재스캔이
 // invalid_xml 로 정확히 잡는다.
-func TestReplaceRawWithStrayEndTagIsInvalidXML(t *testing.T) {
+//
+// payload 가 `</w:p>` 에서 바뀐 이유: 종료 태그는 더 이상 디코더를 깨뜨리지
+// 않는다. 깊이 검사가 RawToken 으로 훑으면서 그것을 토큰으로 받아 세고
+// unbalanced_xml 로 거절하기 때문이다 (그 갈래는
+// TestReplaceRawClosingUnopenedElementRejected 가 잡는다). 이 테스트가 지키는
+// 것은 "토큰이 되기도 전에 깨지는 조각"이므로 어휘적으로 깨진 입력을 쓴다.
+func TestReplaceRawWithBrokenSyntaxIsInvalidXML(t *testing.T) {
 	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
 	p := open(t, src)
 
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
-			Path: "document/body[1]/p[2]", XML: patch.Str(`</w:p>`)}},
+			Path: "document/body[1]/p[2]", XML: patch.Str(`<w:p`)}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -1079,6 +1085,94 @@ func TestReplaceRawWithStrayEndTagIsInvalidXML(t *testing.T) {
 	}
 	if !bytes.Equal(src, got) {
 		t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+	}
+}
+
+// TestReplaceRawClosingUnopenedElementRejected 는 자기가 열지 않은 요소를 닫는
+// 조각을 거절하는지 본다.
+//
+// 실측된 결함 (form-a.docx, 문단 6개):
+//
+//	{"op":"replaceRaw","path":"document/body[1]/p[4]","xml":"</w:body><w:body>"}
+//	→ {"ok":true} exit 0, 출력 파일 생성, 문단 6→5, 본문 요소 1→2
+//
+// 왜 요소 검사를 빠져나갔나: 조각만 따로 디코드하면 빈 스택에서 종료 태그를
+// 만나 바로 깨지므로, 앞 웨이브는 이 입력을 "문법이 깨진 조각"으로 보고 재스캔에
+// 넘겼다. 그런데 재스캔은 문서 전체를 한 번에 디코드하므로 그 종료 태그가
+// 스플라이스 지점의 **진짜 조상**과 짝이 맞는다. 조각이 같은 요소를 다시 열어
+// 스택 순증이 0 이라 결과는 well-formed 하고 노드도 0 개가 아니다 — 그래서
+// badResult 가 깨끗하다고 답한다. 노드 하나가 조용히 사라진 채로.
+//
+// 규칙: **조각은 자기가 열지 않은 요소를 닫을 수 없다.** 깊이가 한 번이라도
+// 음수로 내려가면 거절한다. 이것이 바이트 스플라이스를 안전하게 만드는 조건
+// 자체다 — 깊이가 0 이상으로 유지되는 조각은 자기 구간 밖으로 손을 뻗을 수 없다.
+//
+// empty_xml 과 이유를 나누는 까닭: 처방이 다르다. empty_xml 은 "진짜 내용을
+// 주거나 delete 를 써라", 이쪽은 "조각이 자기 밖에 손을 댄다 — 연 것만 닫아라".
+func TestReplaceRawClosingUnopenedElementRejected(t *testing.T) {
+	for _, c := range []struct{ name, xml string }{
+		{"닫고 다시 연다", `</w:body><w:body>`},
+		{"종료 태그 하나", `</w:p>`},
+		{"조부모까지 닫고 다시 연다", `</w:body></w:document><w:document><w:body>`},
+		{"요소를 연 뒤 바깥을 닫는다", `<w:p/></w:body><w:body>`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+			p := open(t, src)
+
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+					Path: "document/body[1]/p[2]", XML: patch.Str(c.xml)}},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != "unbalanced_xml" {
+				t.Fatalf("열지 않은 요소를 닫는 조각이 unbalanced_xml 로 거절되지 않았다: %+v", errs)
+			}
+			// 안내가 규칙을 말해야 한다 — "닫아라"만으로는 무엇이 잘못인지 모른다.
+			if !strings.Contains(errs[0].Detail, "열지 않은") {
+				t.Fatalf("안내가 규칙을 설명하지 않는다: %q", errs[0].Detail)
+			}
+
+			// 문서는 손대지 않아야 한다 — 원자성.
+			got, err := p.Bytes()
+			if err != nil {
+				t.Fatalf("Bytes: %v", err)
+			}
+			if !bytes.Equal(src, got) {
+				t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+			}
+		})
+	}
+}
+
+// TestReplaceRawWithUnclosedElementLeftToRescan 은 깊이가 **양수로만** 어긋나는
+// 조각을 새 검사가 가로채지 않는지 잠근다.
+//
+// **이 테스트에는 RED 가 없다** — 과잉 교정을 막는 경계 시험이다. 새 규칙을
+// "깊이가 0 으로 끝나야 한다"로 잘못 넓히면 이 조각이 unbalanced_xml 이 되는데,
+// 그건 틀린 진단이다: 닫히지 않은 요소는 자기 구간 밖을 재구성하지 않는다.
+// 결과 전체가 반드시 깨지므로 재스캔이 잡는다.
+//
+// 재스캔이 실제로 내는 문구는 스플라이스 지점에 달렸다 (실측): 뒤에 조상의
+// 종료 태그가 오면 "element <p> closed by </body>", 파트 끝이면 "닫히지 않은
+// 요소". 둘 다 invalid_xml 이므로 사유만 잠근다 — 문구를 잠그면 지점에 따라
+// 깨지는 테스트가 된다.
+func TestReplaceRawWithUnclosedElementLeftToRescan(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[2]", XML: patch.Str(`<w:p>`)}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
+		t.Fatalf("닫히지 않은 조각이 invalid_xml 로 거절되지 않았다: %+v", errs)
 	}
 }
 

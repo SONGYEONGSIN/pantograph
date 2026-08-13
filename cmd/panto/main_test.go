@@ -637,6 +637,45 @@ func TestApplyRejectsRawWithoutElement(t *testing.T) {
 	}
 }
 
+// TestApplyRejectsRawClosingUnopenedElement 는 자기가 열지 않은 요소를 닫는
+// 조각을 CLI 에서 거절하는지 본다.
+//
+// payload 는 실측된 그대로다 (form-a.docx, 문단 6개):
+// exit 0 · {"ok":true} · 출력 파일 생성 · 문단 6→5 · 본문 요소 1→2 였다.
+// 결과가 well-formed 하고 노드도 0 개가 아니라 재스캔의 두 그물을 모두 통과했다.
+//
+// 사유까지 보는 이유: 종료 코드와 출력 파일 유무만 보면 어느 검사가 잡았는지
+// 구별되지 않아, 규칙을 지워도 초록이 유지될 수 있다.
+func TestApplyRejectsRawClosingUnopenedElement(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	body := fmt.Sprintf(`{"ops":[{"op":"replaceRaw","path":"document/body[1]/p[2]","xml":%q}]}`,
+		`</w:body><w:body>`)
+	if err := os.WriteFile(patchPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
+	if code != exitInput {
+		t.Fatalf("열지 않은 요소를 닫는 조각인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "unbalanced_xml") {
+		t.Fatalf("stdout 에 unbalanced_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
 // TestTmplFillNullValue 는 데이터 JSON 의 null 이 값이 아니라 부재로
 // 취급되는지 본다.
 //
