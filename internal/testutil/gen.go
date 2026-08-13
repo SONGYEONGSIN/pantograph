@@ -4,6 +4,7 @@ package testutil
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -33,8 +34,12 @@ var escaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 func MinimalDocx(paragraphs []string) []byte {
 	var body strings.Builder
 	for i, p := range paragraphs {
-		body.WriteString(`<w:p w14:paraId="0000000`)
-		body.WriteByte(byte('1' + i)) // 문단마다 다른 휘발성 ID — 실제 Word 를 흉내낸다
+		// 문단마다 다른 휘발성 ID — 실제 Word 의 w14:paraId 처럼 8자리 16진수.
+		// 한 바이트('1'+i)로 채우던 때는 열째 문단부터 16진수를 벗어났고
+		// ('0000000:'), 열두째에서 '1'+11 = 0x3C = '<' 가 속성값 안으로 흘러
+		// XML 자체를 깨뜨렸다. 첫 아홉 문단의 값은 그때와 같다.
+		body.WriteString(`<w:p w14:paraId="`)
+		fmt.Fprintf(&body, "%08X", i+1)
 		body.WriteString(`"><w:r><w:t xml:space="preserve">`)
 		body.WriteString(escaper.Replace(p))
 		body.WriteString(`</w:t></w:r></w:p>`)
