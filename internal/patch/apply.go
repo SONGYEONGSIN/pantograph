@@ -2,7 +2,9 @@ package patch
 
 import (
 	"bytes"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -14,7 +16,7 @@ import (
 // xmlEscaper 는 텍스트 노드에서 의미를 갖는 세 글자만 이스케이프한다.
 // xml.EscapeText 는 개행·탭까지 문자 참조로 바꿔 원본에 없던 바이트를 만든다.
 // 이미 이스케이프된 입력(예: "&amp;")은 다시 이스케이프된다("&amp;amp;") —
-// op.Text 는 항상 순수 텍스트(디코딩된 값)로 취급하므로 의도된 동작이다.
+// *op.Text 는 항상 순수 텍스트(디코딩된 값)로 취급하므로 의도된 동작이다.
 var xmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 type splice struct {
@@ -135,6 +137,183 @@ func resolvePart(doc *parts.Document, op Op) (string, *Error) {
 	return "", &Error{Path: op.Path, Reason: se.Reason, Detail: se.Detail}
 }
 
+// checkFields 는 연산과 필드가 맞는지 본다.
+//
+// Op 는 합집합 타입이다 — Text 는 setText 전용, XML 은 replaceRaw 전용이고
+// delete 는 둘 다 쓰지 않는다. 이 계약을 검사하지 않으면 필드를 잘못 고르거나
+// 빠뜨린 패치가 조용히 내용을 지운다 (설계 §1).
+//
+// 순서가 진단의 품질이다: 안 쓰는 필드를 먼저 본다. setText 에 xml 만 준
+// 입력은 "값을 빠뜨렸다"가 아니라 "필드를 잘못 골랐다"이기 때문이다 (설계 §3.2).
+func checkFields(op Op) *Error {
+	switch op.Op {
+	case "setText":
+		if op.XML != nil {
+			return &Error{Path: op.Path, Reason: "unused_field",
+				Detail: "setText 는 xml 을 쓰지 않는다 — 텍스트는 text 에 준다"}
+		}
+		if op.Text == nil {
+			return &Error{Path: op.Path, Reason: "missing_text",
+				Detail: "setText 에 text 가 없다"}
+		}
+	case "replaceRaw":
+		if op.Text != nil {
+			return &Error{Path: op.Path, Reason: "unused_field",
+				Detail: "replaceRaw 는 text 를 쓰지 않는다 — 마크업은 xml 에 준다"}
+		}
+		if op.XML == nil {
+			return &Error{Path: op.Path, Reason: "missing_xml",
+				Detail: "replaceRaw 에 xml 이 없다"}
+		}
+		// 조각을 한 번 훑어 세 가지를 본다. 순서는 escapes 가 먼저다 —
+		// `</w:p>` 처럼 둘 다 걸리는 입력의 실제 결함은 "요소가 없다"가 아니라
+		// "바깥을 닫는다"이고, §3 은 처방이 다르면 이유를 나눈다.
+		elem, escapes, err := scanFragment(*op.XML)
+
+		// 조각은 자기가 열지 않은 요소를 닫을 수 없다.
+		//
+		// 이 검사가 없으면 `</w:body><w:body>` 같은 조각이 통과한다 (실측:
+		// form-a.docx 문단 6→5, ok:true, exit 0). 조각만 따로 보면 깨진
+		// 입력이지만, 그 종료 태그는 스플라이스 지점의 **진짜 조상**과 짝이
+		// 맞고 조각이 같은 요소를 다시 열어 스택 순증이 0 이다 — 결과가
+		// well-formed 하고 노드도 0 개가 아니라 재스캔의 두 그물을 모두 빠져
+		// 나간다. 노드 하나가 조용히 사라진 채로.
+		//
+		// 깊이가 음수로 내려가지 않는다는 것이 곧 바이트 스플라이스가 안전한
+		// 조건이다: 그런 조각은 자기 구간 밖의 구조에 손을 뻗을 수 없다.
+		// 반대로 깊이가 양수로 끝나는 조각(닫히지 않은 요소)은 바깥을 재구성
+		// 하지 않으므로 여기서 잡지 않는다 — 결과가 깨져 재스캔이 말한다.
+		if escapes {
+			return &Error{Path: op.Path, Reason: "unbalanced_xml",
+				Detail: "replaceRaw 의 xml 이 자기가 열지 않은 요소를 닫는다 — 조각은 대체할 구간 밖의 구조를 건드릴 수 없다. 조각 안에서 연 것만 닫을 것"}
+		}
+
+		// 조각은 **자기 바이트만으로 끝까지 토큰화**돼야 한다.
+		//
+		// 토큰 도중에 끊긴 조각(`<w:p/><!--`, `<w:p/><![CDATA[`, 미완결 시작
+		// 태그)은 위의 두 검사가 답하지 않는다 — 끊긴 지점까지는 깊이도 음수가
+		// 아니고 요소도 있다. 그런데 스플라이스 뒤에는 **문서 바이트가 그 미완결
+		// 구성을 이어받아** 종결자까지를 주석·CDATA·속성값으로 삼킨다. 삼킨
+		// 구간이 균형 잡혀 있으면 결과는 well-formed 하고 노드도 0 개가 아니라
+		// 재스캔의 두 그물을 모두 통과한다 (실측: 본문 끝에 `-->` 가 있는 문서에서
+		// 문단 3→2, ok:true, exit 0 — 삼킨 문단은 바이트로는 남아 있고 주석이
+		// 됐을 뿐이라 파일 크기로는 아무것도 안 보인다).
+		//
+		// invalid_xml 을 재사용하지 않는 이유: 그건 **결과**에 대한 판정이고
+		// ("적용 결과가 유효한 XML 이 아니다") 이 부류의 가장 위험한 사례에서는
+		// 결과가 오히려 유효하다. 그 문구를 쓰면 도구가 거짓을 말하게 된다.
+		// unbalanced_xml 과도 나눈다: 저쪽은 "열지 않은 것을 닫았다"이고
+		// 이쪽은 "조각만으로는 끝까지 읽히지 않는다"라 사용자가 할 일이 다르다.
+		//
+		// 규칙은 "잘렸다"가 아니라 **"조각만으로 끝까지 읽힌다"**이다. 잘린
+		// 조각 말고도 디코더가 읽기를 마치지 못하는 입력이 있다 — 조각 안에서
+		// 풀 수 없는 엔티티(`&nbsp;`), 이스케이프하지 않은 `]]>` 등(실측).
+		// 그 입력들의 처방은 전부 같다("조각만 따로 읽어도 끝까지 읽히게 고쳐라")
+		// 므로 이유를 더 쪼개지 않고, 디코더가 걸린 지점을 detail 에 그대로 실어
+		// 무엇이 문제인지는 정확히 말한다 (invalid_xml 이 재스캔 오류를 싣는 것과
+		// 같은 방식). 어느 부류가 위험한지를 문구로 가르려면 "이건 재스캔이
+		// 잡는다"를 다시 주장해야 하는데, 이 슬라이스에서 그 주장은 세 번 틀렸다.
+		if err != nil {
+			return &Error{Path: op.Path, Reason: "incomplete_xml",
+				Detail: fmt.Sprintf("replaceRaw 의 xml 을 조각만으로는 끝까지 읽을 수 없다 (%v) — 조각은 그 자체로 완결돼야 한다. 조각 안에서 연 주석·CDATA·태그·속성값·엔티티는 조각 안에서 끝낼 것. 끊긴 조각은 뒤따르는 문서 바이트를 종결자로 삼아 대체 구간 밖의 내용을 삼킨다", err)}
+		}
+
+		// 조각은 요소를 하나 이상 담아야 한다. 빈 문자열만 보면 " " · 주석 ·
+		// 텍스트 같은 요소 없는 조각이 그대로 통과해 노드를 지우고 ok:true 를
+		// 낸다 — "" 와 " " 는 보이지 않는 한 바이트 차이인데 결과가 정반대였다.
+		//
+		// 이유를 나누지 않는다: 이 입력들의 처방이 전부 같다
+		// ("진짜 내용을 주거나 delete 를 써라").
+		//
+		// err 가드가 필요 없다: 위에서 이미 거절했으므로 여기 오는 조각은
+		// 끝까지 토큰화된 것뿐이고, "요소가 없다"가 입력을 정확히 설명한다.
+		if !elem {
+			return &Error{Path: op.Path, Reason: "empty_xml",
+				Detail: "replaceRaw 의 xml 에 요소가 하나도 없다 — 노드를 지우려면 delete 를 쓸 것"}
+		}
+	case "delete":
+		if op.Text != nil || op.XML != nil {
+			return &Error{Path: op.Path, Reason: "unused_field",
+				Detail: "delete 는 text·xml 을 쓰지 않는다 — 지울 노드는 path 로만 지목한다"}
+		}
+	default:
+		// 연산 이름 판정도 경로 조회보다 먼저 한다. §3.2 가 필드에 대해 세운
+		// 논증이 그대로 적용된다 — 이름이 틀렸다는 건 경로가 존재하든 말든
+		// 사실이고, path_not_found 만 보여주면 사용자는 경로를 고쳐 재시도한
+		// 뒤에야 이름이 틀렸음을 알게 된다.
+		e := unknownOpError(op)
+		return &e
+	}
+	return nil
+}
+
+// unknownOpError 는 알 수 없는 연산의 거절이다. checkFields 와 spliceOne 의
+// 백스톱이 같은 문구를 쓰도록 한 곳에 둔다 — 두 벌로 두면 연산을 늘릴 때
+// 한쪽만 고쳐져 같은 실수에 두 답이 나온다.
+func unknownOpError(op Op) Error {
+	return Error{
+		Path:   op.Path,
+		Reason: "unknown_op",
+		Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw | delete)", op.Op),
+	}
+}
+
+// scanFragment 는 조각을 한 번 훑어 두 가지를 답한다.
+//
+//	elem    — 요소가 하나라도 있는가
+//	escapes — 자기가 열지 않은 요소를 닫는가 (깊이가 한 번이라도 음수로 내려간다)
+//
+// **읽기지 재직렬화가 아니다** — 토큰만 훑고 조각의 바이트는 그대로 스플라이스된다.
+// 한 번만 훑는다: 두 물음의 답은 같은 토큰열에서 나온다.
+//
+// Token 이 아니라 RawToken 을 쓴다. Token 은 요소 짝을 검사해서, 빈 스택에서
+// 종료 태그를 만나면 **토큰 대신 오류**를 낸다 — 우리가 세야 할 바로 그 태그를
+// 볼 수가 없다. 앞 웨이브가 `</w:body><w:body>` 를 놓친 것이 정확히 이 때문이다.
+// RawToken 은 짝도 네임스페이스도 검사하지 않고 토큰만 준다. 짝 검사는 여기서
+// 할 일이 아니다 — 조각의 종료 태그가 짝지어야 할 상대는 조각 안이 아니라
+// 스플라이스 지점의 조상일 수 있고, 그 판정은 결과 전체를 보는 재스캔의 몫이다.
+//
+// xmlscan.Scan 을 쓰지 않는 이유: 조각은 최상위 요소가 여럿일 수 있는데
+// (예: 문단 하나를 둘로 늘리는 `<w:p/><w:p/>`) Scan 은 루트 별칭 하나만 부여해
+// 둘째를 경로 충돌로 거절한다. 정당한 패치가 막힌다.
+//
+// 토큰화가 EOF 가 아니라 오류로 끝나면 그 자리까지의 답과 함께 err 을 낸다.
+// **그 자체가 거절 사유다**(incomplete_xml) — 조각의 토큰열이 조각의 바이트만으로
+// 정해지지 않는다는 뜻이고, 스플라이스 뒤에는 문서 바이트가 그 미완결 구성을
+// 이어받아 종결자까지를 삼킨다. 호출자는 elem 으로 거절하지 않는다: 끊긴 조각에
+// "요소가 없다"고 답하면 입력을 잘못 설명하는 셈이라 err 을 먼저 본다.
+//
+// 앞 웨이브는 이 갈래를 "결과가 반드시 깨지므로 재스캔이 invalid_xml 로 잡는다"고
+// 적었다. **거짓이었다** — 삼킨 구간이 균형 잡혀 있으면 결과가 well-formed 하고
+// 노드도 0 개가 아니라 재스캔의 두 그물을 모두 통과한다(실측). 재스캔이 백스톱이
+// 되는 것은 조각의 토큰열이 조각의 바이트만으로 결정될 때뿐이다.
+//
+// escapes 를 err 보다 먼저 믿는 이유: 깊이가 이미 음수로 내려간 것은 뒤에 무엇이
+// 오든 뒤집히지 않는 사실이다.
+func scanFragment(frag string) (elem, escapes bool, err error) {
+	dec := xml.NewDecoder(strings.NewReader(frag))
+	depth := 0
+	for {
+		tok, err := dec.RawToken()
+		if err == io.EOF {
+			return elem, false, nil
+		}
+		if err != nil {
+			return elem, false, err
+		}
+		switch tok.(type) {
+		case xml.StartElement:
+			elem = true
+			depth++
+		case xml.EndElement:
+			depth--
+			if depth < 0 {
+				return elem, true, nil
+			}
+		}
+	}
+}
+
 // spliceOne 은 파트 하나에 그 파트의 op 들을 적용해 스플라이스된 버퍼를 낸다.
 // 반환은 (out, nil) 또는 (nil, errs) 다 — 에러가 있으면 버퍼를 만들지 않는다.
 func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) {
@@ -161,6 +340,14 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 		}
 		seen[op.Path] = true
 
+		// 필드 정합을 경로 조회보다 먼저 본다. 필드가 틀렸다는 건 경로가
+		// 존재하든 말든 사실이고, 경로까지 틀린 패치에서 path_not_found 만
+		// 보여주면 사용자가 경로를 고친 뒤 두 번째 오류를 만난다.
+		if e := checkFields(op); e != nil {
+			errs = append(errs, *e)
+			continue
+		}
+
 		n, ok := tree.Lookup(op.Path)
 		if !ok {
 			errs = append(errs, Error{
@@ -172,7 +359,23 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 		}
 		switch op.Op {
 		case "replaceRaw":
-			splices = append(splices, splice{span: n.Span, repl: []byte(op.XML), path: op.Path})
+			splices = append(splices, splice{span: n.Span, repl: []byte(*op.XML), path: op.Path})
+		case "delete":
+			// 루트를 지우면 파트가 XML 선언만 남은 파일이 된다. 재스캔이 이를
+			// empty_part 로 잡을 텐데, 사용자가 주지 않은 XML 을 재스캔으로
+			// 책임지기보다 사전에 거절하는 쪽이 낫다. 루트는 "할 수 없다",
+			// 다른 노드는 "할 수 있다"는 뜻의 분리된 거절이다.
+			if op.Path == part.Root {
+				errs = append(errs, Error{
+					Path:   op.Path,
+					Reason: "delete_root",
+					Detail: fmt.Sprintf("루트 노드 %s 는 지울 수 없다 — 파트가 빈 파일이 된다", part.Root),
+				})
+				continue
+			}
+			// 요소 전체를 폭 0 으로 치환한다. 앞뒤 공백·개행은 건드리지 않는다 —
+			// 인접 바이트를 먹으면 어디까지 지웠는지가 흐려지고 I2 논증이 약해진다.
+			splices = append(splices, splice{span: n.Span, repl: nil, path: op.Path})
 		case "setText":
 			// 거절 문구는 포맷 특정 요소 이름을 대지 않는다 — 같은 텍스트 요소가
 			// docx 에서는 w:t, pptx 에서는 a:t 다. setText 의 규칙은 "Word 의
@@ -201,7 +404,7 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 			// 없는데 속성을 붙여주면 원본에 없던 바이트가 생겨 I4a 가 깨진다.
 			// 네임스페이스까지 본다 — 로컬명만 보면 아무 네임스페이스의
 			// space 속성이나 xml:space 로 통과한다.
-			if strings.TrimSpace(op.Text) != op.Text {
+			if strings.TrimSpace(*op.Text) != *op.Text {
 				if v, ok := n.AttrNS(xmlscan.XMLNS, "space"); !ok || v != "preserve" {
 					errs = append(errs, Error{
 						Path:   op.Path,
@@ -214,15 +417,16 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 			// Inner 만 교체한다 — 시작 태그의 속성을 건드리면 I4a 가 깨진다.
 			splices = append(splices, splice{
 				span: n.Inner,
-				repl: []byte(xmlEscaper.Replace(op.Text)),
+				repl: []byte(xmlEscaper.Replace(*op.Text)),
 				path: op.Path,
 			})
 		default:
-			errs = append(errs, Error{
-				Path:   op.Path,
-				Reason: "unknown_op",
-				Detail: fmt.Sprintf("알 수 없는 연산: %s (setText | replaceRaw)", op.Op),
-			})
+			// checkFields 가 먼저 걸러 여기 닿지 않는다. 그래도 남긴다:
+			// 새 연산을 checkFields 의 case 에만 더하고 이 switch 에 빠뜨리면
+			// 그 op 은 스플라이스도 에러도 없이 조용한 무동작이 되고, 도구가
+			// 하지 않은 일을 ok:true 로 보고한다 — 이 저장소가 반복해서
+			// 처벌해 온 실패 부류 그대로다.
+			errs = append(errs, unknownOpError(op))
 		}
 	}
 	if len(errs) > 0 {
@@ -263,11 +467,12 @@ func spliceOne(tree *xmlscan.Tree, part parts.Part, ops []Op) ([]byte, []Error) 
 	// 결함은 전적으로 호출자가 준 XML 에 있으므로 입력 오류(코드 1)로 보고한다.
 	// 내부 오류(코드 2)로 보내면, 종료 코드로 재시도 여부를 판단하는 에이전트가
 	// "패치를 고쳐 다시 시도"가 아니라 "도구가 고장났으니 포기"로 잘못 분기한다 (spec §9).
-	if _, err := xmlscan.Scan(out, part.Root); err != nil {
+	reason, detail := badResult(out, part.Root)
+	if reason != "" {
 		return nil, []Error{{
 			Path:   blame(content, splices, part.Root),
-			Reason: "invalid_xml",
-			Detail: fmt.Sprintf("적용 결과가 유효한 XML 이 아니다 (문서는 손대지 않았다): %v", err),
+			Reason: reason,
+			Detail: detail,
 		}}
 	}
 
@@ -286,11 +491,41 @@ func blame(content []byte, splices []splice, rootAlias string) string {
 		buf.Write(content[:s.span.Start])
 		buf.Write(s.repl)
 		buf.Write(content[s.span.End:])
-		if _, err := xmlscan.Scan(buf.Bytes(), rootAlias); err != nil {
+		reason, _ := badResult(buf.Bytes(), rootAlias)
+		if reason != "" {
 			return s.path
 		}
 	}
 	return splices[0].path
+}
+
+// badResult 는 스플라이스 결과가 파트로서 성립하지 않는 이유를 돌려준다.
+// 성립하면 reason 이 빈 문자열이다.
+func badResult(out []byte, rootAlias string) (reason, detail string) {
+	tree, err := xmlscan.Scan(out, rootAlias)
+	if err != nil {
+		// Scan 이 에러를 내면 XML 파싱 실패다.
+		return "invalid_xml", fmt.Sprintf("적용 결과가 유효한 XML 이 아니다 (문서는 손대지 않았다): %v", err)
+	}
+	// Scan 이 성공해도 요소가 하나도 없으면 파트가 성립하지 않는다.
+	//
+	// **이 갈래는 지금 CLI 입력으로는 도달할 수 없다** — 요소 규칙(checkFields 의
+	// empty_xml)과 delete_root 가 앞에서 막는다.
+	//
+	// 웨이브 2 는 여기에 "셋째 길이 있다"고 적었다 — 어휘적으로 미완결인
+	// 조각(`<!--` 등)이 두 검사를 지나쳐 여기까지 온다는 것이었다. 그 길은
+	// 이제 조각 검사(incomplete_xml)가 앞에서 끊는다. 재측정한 결과 루트를
+	// 미완결 주석·CDATA 로 바꾸는 패치는 여기 오기 전에 거절된다 (스펙 §3.3).
+	//
+	// 그래도 지우지 않는다: 이건 내용을 지우는 경로의 마지막 그물이고,
+	// "지금 도달 불가"는 "불필요"가 아니라 앞선 검사들에 의존하는 조건부
+	// 사실이다. 하나라도 느슨해지면 이 그물이 유일한 방어가 된다 (실측: 요소
+	// 규칙을 무력화하면 루트를 공백으로 바꾸는 패치가 여기서 empty_part 로
+	// 걸린다). 시험은 apply_internal_test.go 가 술어를 직접 불러서 한다.
+	if len(tree.Nodes) == 0 {
+		return "empty_part", "적용 결과에 요소가 하나도 없다 (문서는 손대지 않았다)"
+	}
+	return "", ""
 }
 
 // nearbyHint 는 경로를 못 찾았을 때 형제 개수를 알려준다.

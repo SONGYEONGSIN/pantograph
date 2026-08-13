@@ -56,7 +56,7 @@ func TestReplaceRawSubstitutesNode(t *testing.T) {
 			Op:   "replaceRaw",
 			Part: "word/document.xml",
 			Path: "document/body[1]/p[1]",
-			XML:  `<w:p><w:r><w:t>바뀐 제목</w:t></w:r></w:p>`,
+			XML:  patch.Str(`<w:p><w:r><w:t>바뀐 제목</w:t></w:r></w:p>`),
 		}},
 	})
 	if err != nil {
@@ -88,7 +88,7 @@ func TestLocalityUntouchedEntriesAreByteIdentical(t *testing.T) {
 
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p><w:r><w:t>X</w:t></w:r></w:p>`}},
+		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p><w:r><w:t>X</w:t></w:r></w:p>`)}},
 	})
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
@@ -142,7 +142,7 @@ func TestLocalityReal(t *testing.T) {
 		// 첫 문단을 빈 문단으로 교체 — document.xml 만 dirty 가 된다.
 		errs, err := patch.Apply(p, patch.Patch{
 			Hash: p.Hash,
-			Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p/>`}},
+			Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p/>`)}},
 		})
 		if err != nil {
 			t.Fatalf("Apply: %v", err)
@@ -205,7 +205,7 @@ func TestLocalityReal(t *testing.T) {
 		// 첫 슬라이드만 고친다 — 나머지 슬라이드 파트는 손대지 않는다.
 		errs, err := patch.Apply(p, patch.Patch{
 			Hash: p.Hash,
-			Ops:  []patch.Op{{Op: "setText", Part: target, Path: path, Text: "국소성 시험"}},
+			Ops:  []patch.Op{{Op: "setText", Part: target, Path: path, Text: patch.Str("국소성 시험")}},
 		})
 		if err != nil {
 			t.Fatalf("Apply: %v", err)
@@ -252,8 +252,8 @@ func TestAtomicityNothingAppliedOnBadPath(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p><w:r><w:t>유효</w:t></w:r></w:p>`},
-			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[99]", XML: `<w:p/>`},
+			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p><w:r><w:t>유효</w:t></w:r></w:p>`)},
+			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[99]", XML: patch.Str(`<w:p/>`)},
 		},
 	})
 	if err != nil {
@@ -284,7 +284,7 @@ func TestPathNotFoundHintOnBareRootDoesNotNameRootAlias(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "root", XML: `<w:p/>`}},
+		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "root", XML: patch.Str(`<w:p/>`)}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -329,7 +329,7 @@ func TestSetTextRejectionDetailsNameNoFormatElement(t *testing.T) {
 			p := open(t, src)
 			errs, err := patch.Apply(p, patch.Patch{
 				Hash: p.Hash,
-				Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: c.path, Text: c.text}},
+				Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: c.path, Text: patch.Str(c.text)}},
 			})
 			if err != nil {
 				t.Fatalf("Apply: %v", err)
@@ -354,7 +354,7 @@ func TestHashMismatchRejected(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p/>`}},
+		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p/>`)}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -369,8 +369,8 @@ func TestOverlapRejected(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p/>`},
-			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]", XML: `<w:r/>`}, // p[1] 안쪽
+			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p/>`)},
+			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]", XML: patch.Str(`<w:r/>`)}, // p[1] 안쪽
 		},
 	})
 	if err != nil {
@@ -395,6 +395,27 @@ func TestUnknownOpRejected(t *testing.T) {
 	}
 }
 
+// TestUnknownOpPrecedesPathLookup 은 이름도 틀리고 경로도 틀린 op 에서
+// unknown_op 이 먼저 나오는지 본다.
+//
+// 설계 §3.2 가 필드 검사에 대해 세운 논증이 연산 이름에도 그대로 적용된다:
+// 연산 이름이 틀렸다는 건 경로가 존재하든 말든 사실이고, path_not_found 만
+// 보여주면 사용자는 경로를 고쳐 재시도한 뒤에야 이름이 틀렸음을 알게 된다.
+func TestUnknownOpPrecedesPathLookup(t *testing.T) {
+	// 문단 하나짜리 픽스처 — p[99] 는 존재하지 않는다.
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "setProps", Part: "word/document.xml", Path: "document/body[1]/p[99]"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unknown_op" {
+		t.Fatalf("이름도 경로도 틀린 op 인데 unknown_op 이 아니다(연산 이름 검사가 경로 조회보다 먼저 돌지 않는다): %+v", errs)
+	}
+}
+
 // TestBrokenXMLIsInputError 는 재스캔 실패가 **입력 오류**로 보고되는지 본다.
 //
 // 결함은 전적으로 호출자가 준 XML 에 있다. 이것을 내부 오류(코드 2, stderr, 경로
@@ -405,7 +426,7 @@ func TestBrokenXMLIsInputError(t *testing.T) {
 	p := open(t, src)
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p><w:r>`}},
+		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p><w:r>`)}},
 	})
 	if err != nil {
 		t.Fatalf("깨진 XML 이 내부 오류로 보고됐다: %v", err)
@@ -433,9 +454,9 @@ func TestBrokenXMLBlamesTheOffendingOp(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: `<w:p><w:r><w:t>정상</w:t></w:r></w:p>`},
-			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[2]", XML: `<w:p><w:r>`}, // 여기가 장본인
-			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[3]", XML: `<w:p/>`},
+			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p><w:r><w:t>정상</w:t></w:r></w:p>`)},
+			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[2]", XML: patch.Str(`<w:p><w:r>`)}, // 여기가 장본인
+			{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[3]", XML: patch.Str(`<w:p/>`)},
 		},
 	})
 	if err != nil {
@@ -459,8 +480,8 @@ func TestDuplicatePathRejectedOnEmptyTarget(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "AAA"},
-			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "BBB"},
+			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str("AAA")},
+			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str("BBB")},
 		},
 	})
 	if err != nil {
@@ -488,8 +509,8 @@ func TestDuplicatePathRejectedOnNonEmptyTarget(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "AAA"},
-			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "BBB"},
+			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str("AAA")},
+			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str("BBB")},
 		},
 	})
 	if err != nil {
@@ -507,7 +528,7 @@ func TestSetTextRejectsSpaceAttrInOtherNamespace(t *testing.T) {
 	p := open(t, testutil.DocxWithBody(`<w:p><w:r><w:t w:space="preserve">제목</w:t></w:r></w:p>`))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str(" 앞뒤 공백 ")}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -539,7 +560,7 @@ func TestSetTextReplacesOnlyInnerText(t *testing.T) {
 
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "새 제목"}},
+		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str("새 제목")}},
 	})
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
@@ -560,7 +581,7 @@ func TestSetTextEscapesMinimally(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "a&b<c>d\ne"}},
+		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str("a&b<c>d\ne")}},
 	})
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
@@ -578,7 +599,7 @@ func TestSetTextRejectsNonTextNode(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"}))
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]", Text: "X"}},
+		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]", Text: patch.Str("X")}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -597,7 +618,7 @@ func TestSetTextRejectsWhitespaceWithoutPreserve(t *testing.T) {
 	}
 
 	errs, err := patch.Apply(p, patch.Patch{
-		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str(" 앞뒤 공백 ")}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -622,7 +643,7 @@ func TestSetTextRejectsSelfClosingTarget(t *testing.T) {
 	beforeCopy := append([]byte(nil), before...)
 
 	errs, err := patch.Apply(p, patch.Patch{
-		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: "새 텍스트"}},
+		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str("새 텍스트")}},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -643,7 +664,7 @@ func TestSetTextAllowsWhitespaceWithPreserve(t *testing.T) {
 	p := open(t, testutil.MinimalDocx([]string{"제목"})) // 생성기가 preserve 를 붙인다
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: " 앞뒤 공백 "}},
+		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str(" 앞뒤 공백 ")}},
 	})
 	if err != nil || len(errs) != 0 {
 		t.Fatalf("preserve 가 있는데 거절됐다: err=%v errs=%+v", err, errs)
@@ -695,8 +716,8 @@ func TestApplyAcrossParts(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "setText", Part: s1, Path: p1, Text: "첫째 바뀜"},
-			{Op: "setText", Part: "pptx/slide[2]", Path: p2, Text: "둘째 바뀜"},
+			{Op: "setText", Part: s1, Path: p1, Text: patch.Str("첫째 바뀜")},
+			{Op: "setText", Part: "pptx/slide[2]", Path: p2, Text: patch.Str("둘째 바뀜")},
 		},
 	})
 	if err != nil || len(errs) != 0 {
@@ -733,8 +754,8 @@ func TestApplyAtomicAcrossParts(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "setText", Part: s1, Path: valid, Text: "유효"},
-			{Op: "setText", Part: "pptx/slide[2]", Path: "sld/없는[99]", Text: "무효"},
+			{Op: "setText", Part: s1, Path: valid, Text: patch.Str("유효")},
+			{Op: "setText", Part: "pptx/slide[2]", Path: "sld/없는[99]", Text: patch.Str("무효")},
 		},
 	})
 	if err != nil {
@@ -762,7 +783,7 @@ func TestPartResolutionErrors(t *testing.T) {
 	for _, c := range cases {
 		errs, err := patch.Apply(p, patch.Patch{
 			Hash: p.Hash,
-			Ops:  []patch.Op{{Op: "setText", Part: c.part, Path: "sld", Text: "x"}},
+			Ops:  []patch.Op{{Op: "setText", Part: c.part, Path: "sld", Text: patch.Str("x")}},
 		})
 		if err != nil {
 			t.Fatalf("%s: Apply: %v", c.part, err)
@@ -793,8 +814,8 @@ func TestOverlapIsPerPart(t *testing.T) {
 	errs, err := patch.Apply(p, patch.Patch{
 		Hash: p.Hash,
 		Ops: []patch.Op{
-			{Op: "setText", Part: s1, Path: find(s1), Text: "A"},
-			{Op: "setText", Part: s2, Path: find(s2), Text: "B"},
+			{Op: "setText", Part: s1, Path: find(s1), Text: patch.Str("A")},
+			{Op: "setText", Part: s2, Path: find(s2), Text: patch.Str("B")},
 		},
 	})
 	if err != nil || len(errs) != 0 {
@@ -821,9 +842,665 @@ func TestLazyPartLoading(t *testing.T) {
 	// Apply 는 자기 Document 를 새로 연다. 그 안에서 몇 개를 스캔하는지 본다.
 	loaded := patch.PartsLoadedBy(p, patch.Patch{
 		Hash: p.Hash,
-		Ops:  []patch.Op{{Op: "setText", Part: target, Path: path, Text: "X"}},
+		Ops:  []patch.Op{{Op: "setText", Part: target, Path: path, Text: patch.Str("X")}},
 	})
 	if len(loaded) != 1 || loaded[0] != target {
 		t.Fatalf("스캔된 파트 %v — 1개(%s)만 스캔해야 한다", loaded, target)
+	}
+}
+
+// TestDeleteRemovesNode 는 delete 가 노드를 통째로 지우고 형제는 남기는지 본다.
+// 지운 뒤에는 경로 번호가 밀리므로 경로가 아니라 텍스트로 확인한다.
+func TestDeleteRemovesNode(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"첫째", "둘째", "셋째"})
+	p := open(t, src)
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "delete", Part: "word/document.xml", Path: "document/body[1]/p[2]"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("에러가 없어야 하는데: %+v", errs)
+	}
+
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if bytes.Contains(content, []byte("둘째")) {
+		t.Fatalf("지워지지 않았다: %s", content)
+	}
+	if !bytes.Contains(content, []byte("첫째")) || !bytes.Contains(content, []byte("셋째")) {
+		t.Fatalf("형제가 함께 사라졌다: %s", content)
+	}
+	// 요소 껍데기까지 지워야 한다 — 텍스트만 비우면 빈 문단이 남는다.
+	if bytes.Contains(content, []byte(`w14:paraId="00000002"`)) {
+		t.Fatalf("요소가 남았다: %s", content)
+	}
+}
+
+// TestDeleteRootRejected 는 루트 삭제를 사전에 거절하는지 본다.
+//
+// 이 자리에 있던 "막지 않아도 재스캔이 invalid_xml 로 잡는다"는 주장은
+// 거짓이었다 — xmlscan.Scan 은 요소가 하나도 없는 입력을 그냥 통과시킨다
+// (스택이 빈 채로 끝나 어느 오류 조건에도 안 걸린다). 그래서 empty_part 가
+// 생기기 전에는 가드를 빼면 errs 가 **비고** 내용 없는 파트가 조용히 쓰였다.
+//
+// 지금 가드를 빼고 재면 나오는 사유는 empty_part 다 (실측: 가드를 무력화하고
+// form-a.docx 에 루트 delete → empty_part, exit 1, 출력 파일 없음). 그래도
+// 사전 거절을 남기는 이유는 처방이 다르기 때문이다 — delete_root 는 "지울
+// 대상을 좁혀라", empty_part 는 "무엇을 남길지 정해라"다.
+func TestDeleteRootRejected(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "delete", Part: "word/document.xml", Path: "document"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "delete_root" {
+		t.Fatalf("루트 삭제가 delete_root 로 거절되지 않았다: %+v", errs)
+	}
+}
+
+// TestDeleteLocalityUntouchedEntriesAreByteIdentical 는 I2 국소성이 삭제에도
+// 성립하는지 본다 — 손대지 않은 엔트리는 압축 데이터까지 같아야 한다.
+func TestDeleteLocalityUntouchedEntriesAreByteIdentical(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"제목", "본문"})
+	p := open(t, src)
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "delete", Part: "word/document.xml", Path: "document/body[1]/p[2]"}},
+	})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("Apply: err=%v errs=%+v", err, errs)
+	}
+	got, err := p.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+
+	before, after := rawEntries(t, src), rawEntries(t, got)
+	for name, wantRaw := range before {
+		gotRaw, ok := after[name]
+		if !ok {
+			t.Fatalf("엔트리 사라짐: %s", name)
+		}
+		if name == "word/document.xml" {
+			if bytes.Equal(wantRaw, gotRaw) {
+				t.Fatal("삭제한 파트인데 압축 데이터가 그대로다")
+			}
+			continue
+		}
+		if !bytes.Equal(wantRaw, gotRaw) {
+			t.Fatalf("안 건드린 엔트리의 압축 데이터가 달라졌다: %s", name)
+		}
+	}
+}
+
+// TestDeleteOverlappingSetTextRejected 는 지우는 서브트리 안을 동시에 고치는
+// 패치를 겹침으로 거절하는지 본다. 순서에 따라 결과가 달라지므로 (I3) 둘 다
+// 적용해선 안 된다.
+func TestDeleteOverlappingSetTextRejected(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "본문"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{
+			{Op: "delete", Part: "word/document.xml", Path: "document/body[1]/p[2]"},
+			{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[2]/r[1]/t[1]", Text: patch.Str("바뀜")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "overlap" {
+		t.Fatalf("겹치는 delete+setText 가 거절되지 않았다: %+v", errs)
+	}
+}
+
+// TestReplaceRawWithoutElementRejected 는 요소가 하나도 없는 조각으로 하는
+// replaceRaw 를 거절하는지 본다.
+//
+// 전체 브랜치 리뷰가 실측한 것: xml 이 " " · "<!-- gone -->" · "\n\t" 이면
+// 노드가 사라지고 ok:true 가 났다 (form-a.docx 문단 6→5, exit 0). empty_xml 은
+// xml=="" 만 봤고, empty_part 는 파트 전체가 비어야 발동하므로 둘 다 이 입력을
+// 놓쳤다. "" 와 " " 는 보이지 않는 한 바이트 차이인데 결과가 정반대였다 —
+// empty_xml 의 안내("지우려면 delete 를 쓸 것")를 읽고 " " 로 재시도한
+// 에이전트가 바로 그 조용한 삭제를 얻었다.
+//
+// 이유를 새로 만들지 않고 empty_xml 을 그대로 쓴다. 이 저장소의 규칙은
+// "처방이 다르면 이유를 나눈다"인데 여기서는 역이 성립한다 — 이 입력들의
+// 처방은 전부 같다("진짜 내용을 주거나 delete 를 써라").
+func TestReplaceRawWithoutElementRejected(t *testing.T) {
+	for _, c := range []struct{ name, xml string }{
+		{"공백 한 칸", " "},
+		{"주석", "<!-- gone -->"},
+		{"개행과 탭", "\n\t"},
+		{"텍스트", "지운다"},
+		{"처리 명령", `<?pi 데이터?>`},
+		{"CDATA", `<![CDATA[<w:p/>]]>`},
+		{"루트를 공백으로", "   "}, // 파트 전체를 비우려는 시도도 같은 규칙에 걸린다
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := "document/body[1]/p[2]"
+			if c.name == "루트를 공백으로" {
+				path = "document"
+			}
+			src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+			p := open(t, src)
+
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+					Path: path, XML: patch.Str(c.xml)}},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != "empty_xml" {
+				t.Fatalf("요소 없는 조각이 empty_xml 로 거절되지 않았다: %+v", errs)
+			}
+			if !strings.Contains(errs[0].Detail, "delete") {
+				t.Fatalf("안내가 delete 를 가리키지 않는다: %q", errs[0].Detail)
+			}
+
+			// 문서는 손대지 않아야 한다 — 원자성.
+			got, err := p.Bytes()
+			if err != nil {
+				t.Fatalf("Bytes: %v", err)
+			}
+			if !bytes.Equal(src, got) {
+				t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+			}
+		})
+	}
+}
+
+// TestReplaceRawWithMultipleTopLevelElementsAccepted 는 최상위 요소가 여럿인
+// 조각이 정당한 입력임을 잠근다.
+//
+// **이 테스트에는 RED 가 없다** — 요소 유무 검사가 과잉 교정되는 것을 막는
+// 경계 시험이다. 검사를 xmlscan.Scan 으로 구현하면 둘째 요소가 첫째와 같은
+// 루트 경로를 받아 "경로 충돌" 로 거절되고, 문단 하나를 둘로 늘리는 정당한
+// 패치가 막힌다.
+func TestReplaceRawWithMultipleTopLevelElementsAccepted(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "둘로 나뉠 문단"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[2]",
+			XML:  patch.Str(`<w:p><w:r><w:t>앞</w:t></w:r></w:p><w:p><w:r><w:t>뒤</w:t></w:r></w:p>`)}},
+	})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("최상위 요소가 여럿인 조각이 거절됐다: err=%v errs=%+v", err, errs)
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Contains(content, []byte("앞")) || !bytes.Contains(content, []byte("뒤")) {
+		t.Fatalf("두 요소가 다 들어가지 않았다: %s", content)
+	}
+}
+
+// TestReplaceRawWithMismatchedNamesIsInvalidXML 은 **이름이 짝지지 않는** 조각의
+// 사유를 잠근다 — 조각 검사가 일부러 재스캔에 남긴 갈래다.
+//
+// `<w:p></w:r>` 는 조각 검사 셋을 전부 통과한다: 끝까지 토큰화되고(RawToken 은
+// 짝을 안 본다), 깊이가 음수로 안 가고, 요소도 있다. 그럴 수밖에 없다 —
+// 조각의 종료 태그가 짝지어야 할 상대는 조각 안이 아니라 스플라이스 지점의
+// 조상일 수 있어서, 이름 판정은 결과 전체를 보는 재스캔의 몫이다. 이 테스트가
+// 그 분업이 실제로 작동함을 잠근다.
+//
+// 이 테스트의 payload 이력이 곧 이 슬라이스의 이력이다. `</w:p>` 였다가
+// (종료 태그를 토큰으로 세게 되면서 unbalanced_xml 로 옮겨감), `<w:p` 였다가
+// (미완결 조각을 사전 거절하게 되면서 incomplete_xml 로 옮겨감), 이제
+// 이름 불일치다. 앞의 둘은 각자의 테스트가 잡는다
+// (TestReplaceRawClosingUnopenedElementRejected /
+// TestReplaceRawWithIncompleteFragmentRejected). 지켜야 할 것은 payload 가
+// 아니라 **재스캔이 아직 담당하는 갈래가 시험된다**는 사실이다.
+func TestReplaceRawWithMismatchedNamesIsInvalidXML(t *testing.T) {
+	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+	p := open(t, src)
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[2]", XML: patch.Str(`<w:p></w:r>`)}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
+		t.Fatalf("이름이 짝지지 않는 조각이 invalid_xml 로 거절되지 않았다: %+v", errs)
+	}
+	got, err := p.Bytes()
+	if err != nil {
+		t.Fatalf("Bytes: %v", err)
+	}
+	if !bytes.Equal(src, got) {
+		t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+	}
+}
+
+// TestReplaceRawClosingUnopenedElementRejected 는 자기가 열지 않은 요소를 닫는
+// 조각을 거절하는지 본다.
+//
+// 실측된 결함 (form-a.docx, 문단 6개):
+//
+//	{"op":"replaceRaw","path":"document/body[1]/p[4]","xml":"</w:body><w:body>"}
+//	→ {"ok":true} exit 0, 출력 파일 생성, 문단 6→5, 본문 요소 1→2
+//
+// 왜 요소 검사를 빠져나갔나: 조각만 따로 디코드하면 빈 스택에서 종료 태그를
+// 만나 바로 깨지므로, 앞 웨이브는 이 입력을 "문법이 깨진 조각"으로 보고 재스캔에
+// 넘겼다. 그런데 재스캔은 문서 전체를 한 번에 디코드하므로 그 종료 태그가
+// 스플라이스 지점의 **진짜 조상**과 짝이 맞는다. 조각이 같은 요소를 다시 열어
+// 스택 순증이 0 이라 결과는 well-formed 하고 노드도 0 개가 아니다 — 그래서
+// badResult 가 깨끗하다고 답한다. 노드 하나가 조용히 사라진 채로.
+//
+// 규칙: **조각은 자기가 열지 않은 요소를 닫을 수 없다.** 깊이가 한 번이라도
+// 음수로 내려가면 거절한다. 이것이 바이트 스플라이스를 안전하게 만드는 조건
+// 자체다 — 깊이가 0 이상으로 유지되는 조각은 자기 구간 밖으로 손을 뻗을 수 없다.
+//
+// empty_xml 과 이유를 나누는 까닭: 처방이 다르다. empty_xml 은 "진짜 내용을
+// 주거나 delete 를 써라", 이쪽은 "조각이 자기 밖에 손을 댄다 — 연 것만 닫아라".
+func TestReplaceRawClosingUnopenedElementRejected(t *testing.T) {
+	for _, c := range []struct{ name, xml string }{
+		{"닫고 다시 연다", `</w:body><w:body>`},
+		{"종료 태그 하나", `</w:p>`},
+		{"조부모까지 닫고 다시 연다", `</w:body></w:document><w:document><w:body>`},
+		{"요소를 연 뒤 바깥을 닫는다", `<w:p/></w:body><w:body>`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+			p := open(t, src)
+
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+					Path: "document/body[1]/p[2]", XML: patch.Str(c.xml)}},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != "unbalanced_xml" {
+				t.Fatalf("열지 않은 요소를 닫는 조각이 unbalanced_xml 로 거절되지 않았다: %+v", errs)
+			}
+			// 안내가 규칙을 말해야 한다 — "닫아라"만으로는 무엇이 잘못인지 모른다.
+			if !strings.Contains(errs[0].Detail, "열지 않은") {
+				t.Fatalf("안내가 규칙을 설명하지 않는다: %q", errs[0].Detail)
+			}
+
+			// 문서는 손대지 않아야 한다 — 원자성.
+			got, err := p.Bytes()
+			if err != nil {
+				t.Fatalf("Bytes: %v", err)
+			}
+			if !bytes.Equal(src, got) {
+				t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+			}
+		})
+	}
+}
+
+// swallowFixture 는 **문서 자신이 종결자를 갖는** 본문을 만든다.
+//
+// tail 은 마지막 문단 뒤에 오는 문자 데이터다. `-->` 도 CDATA 섹션도 본문에
+// 두는 것이 적법한 XML 이고 적법한 OOXML 이다 — 조각이 어휘적으로 끊기면
+// 스플라이스 뒤의 이 바이트들이 종결자 노릇을 한다.
+func swallowFixture(tail string) []byte {
+	return testutil.DocxWithBody(
+		`<w:p><w:r><w:t>문단1</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>문단2</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>문단3</w:t></w:r></w:p>` + tail)
+}
+
+// TestReplaceRawWithIncompleteFragmentRejected 는 자기 바이트만으로 끝까지
+// 토큰화되지 않는 조각을 거절하는지 본다.
+//
+// 실측된 결함 (문단 3개 + 꼬리 `-->`):
+//
+//	{"op":"replaceRaw","path":"document/body[1]/p[2]","xml":"<w:p/><!--"}
+//	→ {"ok":true} exit 0, 출력 파일 생성
+//	→ 스캔된 문단 3→2, 텍스트 ['문단1','문단2','문단3'] → ['문단1']
+//
+// 왜 앞의 두 검사를 빠져나갔나: 토큰 도중에 끊기면 토큰화가 거기서 멈춘다.
+// 그때까지 깊이는 음수로 안 갔고(§3.4) 요소도 하나 봤으므로(§3.3) 두 검사 모두
+// "문제 없다"고 답하고 판정이 스플라이스 후 재스캔으로 넘어간다. 그런데
+// 스플라이스 뒤에는 **문서 바이트가 그 미완결 구성을 이어받아** 종결자까지를
+// 삼킨다. 삼킨 구간이 균형 잡혀 있으면 결과는 well-formed 하고 노드도 0 개가
+// 아니라 재스캔의 두 그물을 모두 통과한다 — 문단 하나가 주석 안으로 들어간 채로.
+//
+// **바이트를 세면 아무것도 안 보인다.** 삼킨 내용은 여전히 파일 안에 있다.
+// 사라진 것은 파싱되는 노드다. 그래서 이 테스트는 원자성(패키지 바이트 불변)을
+// 본다 — 거절되면 애초에 아무 일도 일어나지 않는다.
+//
+// 셋째 케이스에는 종결자가 없다. 그 입력은 전에도 (스플라이스 후 재스캔의)
+// invalid_xml 로 막혔지만, 조각은 뒤에 무엇이 올지 모르므로 판정이 문서에 따라
+// 갈려서는 안 된다 — 한 규칙이 이 부류 전체를 같은 사유로 소유한다.
+//
+// 넷째 케이스는 검사 순서를 잠근다. `<!--` 는 끊겼고 요소도 없어 두 검사에
+// 모두 걸리는데, 사용자가 실제로 한 일은 "내용을 안 줬다"가 아니라 "쓰다가
+// 끊었다"이다. empty_xml 을 내면 "지우려면 delete 를 써라"라고 안내하게 되는데,
+// 그건 이 입력에 대한 처방이 아니다 (§3 의 순서 논증 — `</w:p>` 가
+// unbalanced_xml 을 받는 것과 같은 이유).
+func TestReplaceRawWithIncompleteFragmentRejected(t *testing.T) {
+	for _, c := range []struct{ name, tail, xml, wantInDetail string }{
+		{"미완결 주석 — 문서가 --> 를 준다", `-->`, `<w:p/><!--`, "EOF"},
+		{"미완결 CDATA — 문서가 ]]> 를 준다", `<![CDATA[꼬리]]>`, `<w:p/><![CDATA[`, "EOF in CDATA"},
+		{"미완결 시작 태그 — 종결자 없음", ``, `<w:p/><w:r`, "EOF"},
+		{"요소도 없이 끊긴 조각", `-->`, `<!--`, "EOF"},
+		{"끊긴 엔티티 — 문서가 ; 를 준다", `;꼬리`, `<w:p/>&amp`, "EOF"},
+		{"조각 안에서 풀 수 없는 엔티티", ``, `<w:p><w:r><w:t>&nbsp;</w:t></w:r></w:p>`, "&nbsp;"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := swallowFixture(c.tail)
+			p := open(t, src)
+
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+					Path: "document/body[1]/p[2]", XML: patch.Str(c.xml)}},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != "incomplete_xml" {
+				t.Fatalf("미완결 조각이 incomplete_xml 로 거절되지 않았다: %+v", errs)
+			}
+			// 안내가 규칙을 말해야 한다 — 증상("결과가 깨졌다")이 아니라
+			// 조각이 지켜야 할 조건을 말한다.
+			if !strings.Contains(errs[0].Detail, "조각 안에서") {
+				t.Fatalf("안내가 규칙을 설명하지 않는다: %q", errs[0].Detail)
+			}
+			// 규칙만으로는 어디서 걸렸는지 알 수 없다. 디코더가 멈춘 지점을
+			// 함께 실어야 한다 — 특히 잘리지 않은 입력(풀 수 없는 엔티티)에는
+			// 규칙 문구만 주면 도구가 입력을 잘못 설명하는 셈이 된다.
+			if !strings.Contains(errs[0].Detail, c.wantInDetail) {
+				t.Fatalf("안내가 걸린 지점(%q)을 말하지 않는다: %q", c.wantInDetail, errs[0].Detail)
+			}
+
+			// 문서는 손대지 않아야 한다 — 원자성.
+			got, err := p.Bytes()
+			if err != nil {
+				t.Fatalf("Bytes: %v", err)
+			}
+			if !bytes.Equal(src, got) {
+				t.Fatalf("거절된 패치인데 문서가 바뀌었다 (원자성 위반)")
+			}
+		})
+	}
+}
+
+// TestReplaceRawWithUnclosedElementLeftToRescan 은 깊이가 **양수로만** 어긋나는
+// 조각을 새 검사가 가로채지 않는지 잠근다.
+//
+// **이 테스트에는 RED 가 없다** — 과잉 교정을 막는 경계 시험이다. 새 규칙을
+// "깊이가 0 으로 끝나야 한다"로 잘못 넓히면 이 조각이 unbalanced_xml 이 되는데,
+// 그건 틀린 진단이다: 닫히지 않은 요소는 자기 구간 밖을 재구성하지 않는다.
+// 결과 전체가 반드시 깨지므로 재스캔이 잡는다.
+//
+// 재스캔이 실제로 내는 문구는 스플라이스 지점에 달렸다 (실측): 뒤에 조상의
+// 종료 태그가 오면 "element <p> closed by </body>", 파트 끝이면 "닫히지 않은
+// 요소". 둘 다 invalid_xml 이므로 사유만 잠근다 — 문구를 잠그면 지점에 따라
+// 깨지는 테스트가 된다.
+func TestReplaceRawWithUnclosedElementLeftToRescan(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[2]", XML: patch.Str(`<w:p>`)}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "invalid_xml" {
+		t.Fatalf("닫히지 않은 조각이 invalid_xml 로 거절되지 않았다: %+v", errs)
+	}
+}
+
+// TestSetTextWithoutTextRejected 는 text 를 빠뜨린 setText 가 거절되는지 본다.
+// 포인터로 바꾸기 전에는 nil 과 "" 가 같은 제로값이라, 빠뜨린 패치가 조용히
+// 텍스트를 지우고 ok:true 를 냈다 (설계 §1 증상 3 의 다른 얼굴).
+func TestSetTextWithoutTextRejected(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"지켜져야 할 텍스트"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[1]/r[1]/t[1]"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "missing_text" {
+		t.Fatalf("text 없는 setText 가 거절되지 않았다: %+v", errs)
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Contains(content, []byte("지켜져야 할 텍스트")) {
+		t.Fatalf("거절됐는데 텍스트가 사라졌다: %s", content)
+	}
+}
+
+// TestSetTextWithEmptyStringAccepted 는 빈 문자열이 정당한 값으로 남는지 본다.
+// 양식 필드를 비우는 것은 정당한 요구이고, 이걸 막으면 빠뜨림을 잡는 대가로
+// 정상 기능을 잃는다.
+//
+// **이 테스트에는 RED 가 없다** — 오늘도 통과하고 고친 뒤에도 통과해야 한다.
+// 과잉 교정을 막는 경계 시험이다: "빈 값 금지"로 문제를 풀려는 구현은 여기서
+// 걸린다. 그것이 이 테스트가 지키는 유일한 것이고, 그래서 여기 있다.
+func TestSetTextWithEmptyStringAccepted(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"지워질 텍스트"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]/r[1]/t[1]", Text: patch.Str("")}},
+	})
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("빈 문자열이 거절됐다: err=%v errs=%+v", err, errs)
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if bytes.Contains(content, []byte("지워질 텍스트")) {
+		t.Fatalf("빈 문자열이 적용되지 않았다: %s", content)
+	}
+	// 요소는 남아야 한다 — 텍스트를 비우는 것이지 노드를 지우는 게 아니다.
+	if !bytes.Contains(content, []byte(`w14:paraId="00000001"`)) {
+		t.Fatalf("요소까지 사라졌다: %s", content)
+	}
+}
+
+// TestReplaceRawWithoutXMLRejected 는 xml 을 빠뜨린 replaceRaw 가 거절되는지
+// 본다. 설계 §1 증상 1 — 오늘은 노드가 통째로 사라지고 ok:true 가 난다.
+func TestReplaceRawWithoutXMLRejected(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops:  []patch.Op{{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[2]"}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "missing_xml" {
+		t.Fatalf("xml 없는 replaceRaw 가 거절되지 않았다: %+v", errs)
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Contains(content, []byte("지켜져야 할 문단")) {
+		t.Fatalf("거절됐는데 문단이 사라졌다: %s", content)
+	}
+}
+
+// TestReplaceRawWithEmptyXMLRejected 는 xml 이 빈 문자열인 replaceRaw 가
+// 거절되고, 안내가 delete 를 가리키는지 본다. 설계 §1 증상 2.
+//
+// missing_xml 과 이유를 나누는 까닭: 전자는 "내용을 빠뜨렸다", 후자는
+// "지우려 했다"로 의도가 다르고 처방이 다르다.
+func TestReplaceRawWithEmptyXMLRejected(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[2]", XML: patch.Str("")}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "empty_xml" {
+		t.Fatalf("빈 xml 이 empty_xml 로 거절되지 않았다: %+v", errs)
+	}
+	if !strings.Contains(errs[0].Detail, "delete") {
+		t.Fatalf("안내가 delete 를 가리키지 않는다: %q", errs[0].Detail)
+	}
+	content, err := p.Part("word/document.xml")
+	if err != nil {
+		t.Fatalf("Part: %v", err)
+	}
+	if !bytes.Contains(content, []byte("지켜져야 할 문단")) {
+		t.Fatalf("거절됐는데 문단이 사라졌다: %s", content)
+	}
+}
+
+// TestFieldCheckPrecedesPathLookup 은 checkFields 가 tree.Lookup 보다 먼저
+// 도는지 잠근다 (설계 §3.2).
+//
+// 이 순서는 우연이 아니라 의도된 진단 품질 결정이다: 필드도 빠뜨리고 경로도
+// 틀린 op 을 주면, path_not_found 가 아니라 필드 사유(missing_text/missing_xml)
+// 가 나야 한다. 순서가 뒤집혀도(checkFields 를 tree.Lookup 뒤로 옮겨도) 전체
+// 스위트는 초록으로 남는다 — 어느 기존 테스트도 "두 가지가 동시에 틀린" op 을
+// 주지 않기 때문이다. 그 드리프트가 실제로 벌어지면 사용자는 path_not_found
+// 를 보고 경로부터 고쳐 재시도하고, 그제서야(두 번째 시도에서) 진짜 원인이
+// 필드 누락이었음을 알게 된다 — 이 테스트가 막는 것이 정확히 그 시나리오다.
+func TestFieldCheckPrecedesPathLookup(t *testing.T) {
+	cases := []struct {
+		name   string
+		op     patch.Op
+		reason string
+	}{
+		{
+			name:   "setText",
+			op:     patch.Op{Op: "setText", Part: "word/document.xml", Path: "document/body[1]/p[99]/r[1]/t[1]"},
+			reason: "missing_text",
+		},
+		{
+			name:   "replaceRaw",
+			op:     patch.Op{Op: "replaceRaw", Part: "word/document.xml", Path: "document/body[1]/p[99]"},
+			reason: "missing_xml",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// 문단 하나짜리 픽스처 — p[99] 는 존재하지 않는다.
+			p := open(t, testutil.MinimalDocx([]string{"제목"}))
+			errs, err := patch.Apply(p, patch.Patch{
+				Hash: p.Hash,
+				Ops:  []patch.Op{c.op},
+			})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != c.reason {
+				t.Fatalf("필드도 경로도 틀린 op 인데 사유가 %s 가 아니다(필드 검사가 경로 조회보다 먼저 돌지 않는다): %+v", c.reason, errs)
+			}
+		})
+	}
+}
+
+// TestUnusedFieldRejected 는 연산이 쓰지 않는 필드가 오면 거절하는지 본다.
+//
+// setText 에 xml 을 준 첫 케이스가 설계 §1 증상 3 이다 — 오늘은 xml 이 조용히
+// 무시되고 text 가 빈 값으로 적용되어 텍스트가 사라진다.
+func TestUnusedFieldRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		op   patch.Op
+	}{
+		{"setText 에 xml", patch.Op{Op: "setText", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]/r[1]/t[1]", XML: patch.Str(`<w:t>바뀜</w:t>`)}},
+		{"replaceRaw 에 text", patch.Op{Op: "replaceRaw", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]", Text: patch.Str("바뀜")}},
+		{"delete 에 text", patch.Op{Op: "delete", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]", Text: patch.Str("바뀜")}},
+		{"delete 에 xml", patch.Op{Op: "delete", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]", XML: patch.Str(`<w:p/>`)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := open(t, testutil.MinimalDocx([]string{"지켜져야 할 텍스트"}))
+			errs, err := patch.Apply(p, patch.Patch{Hash: p.Hash, Ops: []patch.Op{c.op}})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(errs) != 1 || errs[0].Reason != "unused_field" {
+				t.Fatalf("안 쓰는 필드가 거절되지 않았다: %+v", errs)
+			}
+			content, err := p.Part("word/document.xml")
+			if err != nil {
+				t.Fatalf("Part: %v", err)
+			}
+			if !bytes.Contains(content, []byte("지켜져야 할 텍스트")) {
+				t.Fatalf("거절됐는데 내용이 바뀌었다: %s", content)
+			}
+		})
+	}
+}
+
+// TestUnusedFieldWinsOverMissingField 는 두 결함이 겹칠 때 어느 이유를 내는지
+// 고정한다 (설계 §3.2).
+//
+// {"op":"setText","xml":…} 는 text 도 없고 안 쓰는 필드도 있다. 사용자가 실제로
+// 한 실수는 "필드를 잘못 골랐다"이지 "값을 빠뜨렸다"가 아니므로 unused_field 를
+// 낸다. missing_text 를 내면 사용자는 text 를 더하고 xml 은 그대로 둔 채
+// 두 번째 오류를 만난다.
+func TestUnusedFieldWinsOverMissingField(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"지켜져야 할 텍스트"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml",
+			Path: "document/body[1]/p[1]/r[1]/t[1]", XML: patch.Str(`<w:t>바뀜</w:t>`)}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unused_field" {
+		t.Fatalf("겹친 결함에서 unused_field 가 아니다: %+v", errs)
+	}
+}
+
+// TestUnusedFieldCheckedBeforePathLookup 은 경로까지 틀린 패치에서 필드 오류를
+// 먼저 내는지 본다 (설계 §3.2). 경로 오류를 먼저 내면 사용자는 경로를 고친 뒤
+// 두 번째 오류를 만난다.
+func TestUnusedFieldCheckedBeforePathLookup(t *testing.T) {
+	p := open(t, testutil.MinimalDocx([]string{"제목"}))
+
+	errs, err := patch.Apply(p, patch.Patch{
+		Hash: p.Hash,
+		Ops: []patch.Op{{Op: "setText", Part: "word/document.xml",
+			Path: "document/body[1]/p[99]/r[1]/t[1]", XML: patch.Str(`<w:t>바뀜</w:t>`)}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Reason != "unused_field" {
+		t.Fatalf("경로 오류보다 필드 오류가 먼저 나오지 않았다: %+v", errs)
 	}
 }

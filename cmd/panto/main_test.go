@@ -503,7 +503,8 @@ func TestApplyEmptyPatchIsByteIdentical(t *testing.T) {
 // encoding/json 은 모르는 필드를 조용히 버린다. 그래서 "text" 를 "value" 로
 // 잘못 쓴 setText 는 빈 문자열로 성공했다 — {"ok": true} 를 내면서 문서의
 // 텍스트를 지웠다. 빈 텍스트 자체는 정당한 연산이라 결과만 봐서는 오타와
-// 구별되지 않으므로, 막을 수 있는 지점은 디코드뿐이다.
+// 구별되지 않는다. 디코드에서 모르는 필드를 막고(여기), 검증에서 빠뜨린
+// 필드를 막는다(patch.checkFields) — 두 겹이다.
 func TestApplyRejectsUnknownPatchField(t *testing.T) {
 	dir := t.TempDir()
 	inPath := filepath.Join(dir, "in.docx")
@@ -524,6 +525,263 @@ func TestApplyRejectsUnknownPatchField(t *testing.T) {
 	}
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
 		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
+// TestApplyRejectsRawWithoutXML 은 설계 §1 증상 1 의 회귀 시험이다.
+//
+// 측정된 사실: {"op":"replaceRaw","path":…} (xml 없음) 이 ok:true 를 내면서
+// 문단을 지웠다. exit 0 이라 호출자는 성공으로 읽고 넘어간다.
+func TestApplyRejectsRawWithoutXML(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	bad := `{"ops":[{"op":"replaceRaw","path":"document/body[1]/p[2]"}]}`
+	if err := os.WriteFile(patchPath, []byte(bad), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
+	if code != exitInput {
+		t.Fatalf("xml 없는 replaceRaw 인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "missing_xml") {
+		t.Fatalf("stdout 에 missing_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
+// TestApplyRejectsRawWithEmptyXML 은 설계 §1 증상 2 의 회귀 시험이다.
+func TestApplyRejectsRawWithEmptyXML(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	bad := `{"ops":[{"op":"replaceRaw","path":"document/body[1]/p[2]","xml":""}]}`
+	if err := os.WriteFile(patchPath, []byte(bad), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
+	if code != exitInput {
+		t.Fatalf("빈 xml 인 replaceRaw 인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "empty_xml") {
+		t.Fatalf("stdout 에 empty_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
+// TestApplyRejectsRawWithoutElement 는 요소가 하나도 없는 조각으로 하는
+// replaceRaw 를 CLI 에서 거절하는지 본다.
+//
+// 앞 세 payload 는 전체 브랜치 리뷰가 실측한 그대로다 — 세 경우 모두 문단이
+// 사라지고 exit 0 + 출력 파일이 생겼다. 넷째(루트를 공백으로)는 예전에
+// empty_part 로 걸리던 입력인데, 요소 규칙이 생기면서 더 이른 자리에서
+// empty_xml 로 걸린다. 사유까지 보는 이유: 종료 코드와 출력 파일 유무만 보면
+// 어느 검사가 잡았는지 구별되지 않아, 규칙을 지워도 초록이 유지된다.
+func TestApplyRejectsRawWithoutElement(t *testing.T) {
+	for _, c := range []struct{ name, path, xml string }{
+		{"공백 한 칸", "document/body[1]/p[2]", " "},
+		{"주석", "document/body[1]/p[2]", "<!-- gone -->"},
+		{"개행과 탭", "document/body[1]/p[2]", `\n\t`},
+		{"루트를 공백으로", "document", "   "},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			inPath := filepath.Join(dir, "in.docx")
+			src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+			if err := os.WriteFile(inPath, src, 0o644); err != nil {
+				t.Fatalf("입력 파일 쓰기 실패: %v", err)
+			}
+			patchPath := filepath.Join(dir, "patch.json")
+			body := fmt.Sprintf(`{"ops":[{"op":"replaceRaw","path":%q,"xml":"%s"}]}`, c.path, c.xml)
+			if err := os.WriteFile(patchPath, []byte(body), 0o644); err != nil {
+				t.Fatalf("패치 파일 쓰기 실패: %v", err)
+			}
+			outPath := filepath.Join(dir, "out.docx")
+
+			var code int
+			stdout := captureStdout(t, func() {
+				code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+			})
+			if code != exitInput {
+				t.Fatalf("요소 없는 조각인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+			}
+			if !strings.Contains(stdout, "empty_xml") {
+				t.Fatalf("stdout 에 empty_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+			}
+			if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+				t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+			}
+		})
+	}
+}
+
+// TestApplyRejectsRawClosingUnopenedElement 는 자기가 열지 않은 요소를 닫는
+// 조각을 CLI 에서 거절하는지 본다.
+//
+// payload 는 실측된 그대로다 (form-a.docx, 문단 6개):
+// exit 0 · {"ok":true} · 출력 파일 생성 · 문단 6→5 · 본문 요소 1→2 였다.
+// 결과가 well-formed 하고 노드도 0 개가 아니라 재스캔의 두 그물을 모두 통과했다.
+//
+// 사유까지 보는 이유: 종료 코드와 출력 파일 유무만 보면 어느 검사가 잡았는지
+// 구별되지 않아, 규칙을 지워도 초록이 유지될 수 있다.
+func TestApplyRejectsRawClosingUnopenedElement(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"제목", "지켜져야 할 문단"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	body := fmt.Sprintf(`{"ops":[{"op":"replaceRaw","path":"document/body[1]/p[2]","xml":%q}]}`,
+		`</w:body><w:body>`)
+	if err := os.WriteFile(patchPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
+	if code != exitInput {
+		t.Fatalf("열지 않은 요소를 닫는 조각인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "unbalanced_xml") {
+		t.Fatalf("stdout 에 unbalanced_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
+// TestApplyRejectsIncompleteFragment 는 어휘적으로 끝나지 않는 조각을 CLI 에서
+// 거절하는지 본다.
+//
+// 픽스처와 payload 는 실측된 그대로다. 본문 끝의 `-->` 는 문자 데이터로 적법한
+// XML 이고 적법한 OOXML 이다:
+//
+//	문서: <w:body> p(문단1) p(문단2) p(문단3) --></w:body>
+//	패치: {"op":"replaceRaw","path":"document/body[1]/p[2]","xml":"<w:p/><!--"}
+//	→ exit 0 · {"ok":true} · 출력 파일 생성
+//	→ 스캔된 문단 3→2, 텍스트 ['문단1','문단2','문단3'] → ['문단1']
+//
+// 조각이 토큰 도중에 끊기면 스플라이스 뒤의 **문서 바이트가 그 미완결 구성을
+// 이어받아** 종결자까지를 삼킨다. 삼킨 구간이 균형 잡혀 있으면 결과가
+// well-formed 하고 노드도 0 개가 아니라 재스캔이 통과시킨다.
+//
+// 바이트로는 안 보이는 삭제다 — 삼킨 문단은 파일에 그대로 있고 주석이 됐을
+// 뿐이다. 그래서 출력 파일 유무로 잰다: 거절되면 애초에 파일이 없다.
+func TestApplyRejectsIncompleteFragment(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.DocxWithBody(
+		`<w:p><w:r><w:t>문단1</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>문단2</w:t></w:r></w:p>` +
+			`<w:p><w:r><w:t>문단3</w:t></w:r></w:p>-->`)
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	body := fmt.Sprintf(`{"ops":[{"op":"replaceRaw","path":"document/body[1]/p[2]","xml":%q}]}`,
+		`<w:p/><!--`)
+	if err := os.WriteFile(patchPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
+	if code != exitInput {
+		t.Fatalf("미완결 조각인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "incomplete_xml") {
+		t.Fatalf("stdout 에 incomplete_xml 이 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
+	}
+}
+
+// TestTmplFillNullValue 는 데이터 JSON 의 null 이 값이 아니라 부재로
+// 취급되는지 본다.
+//
+// 실측된 결함: 데이터를 map[string]string 으로 디코드하면 encoding/json 이
+// null 을 "" 로 접으면서 **키는 만든다**. 그래서 Fill 의 `v, ok := data[k.Key]`
+// 가 ok=true 를 받아 missing_key 가 안 나고, 필드가 빈 채로 ok:true·exit 0 인
+// 문서가 나왔다. 이 브랜치가 patch.Op 에 세운 nil 과 "" 의 구분이 정작
+// 사용자 데이터를 받는 층 바로 앞에서 멈춰 있었다.
+//
+// 빈 문자열은 그대로 정당한 값이다 — 양식 필드를 비우는 것은 실제 요구다.
+// 둘을 한 테스트에 두어 과잉 교정이 바로 드러나게 한다.
+func TestTmplFillNullValue(t *testing.T) {
+	for _, c := range []struct {
+		name, data string
+		wantCode   int
+		wantOut    bool
+	}{
+		{"null 은 거절", `{"k1":null}`, exitInput, false},
+		{"빈 문자열은 허용", `{"k1":""}`, exitOK, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tplPath := filepath.Join(dir, "t.docx")
+			if err := os.WriteFile(tplPath, testutil.MinimalDocx([]string{"청구서", "{{k1}}"}), 0o644); err != nil {
+				t.Fatalf("템플릿 쓰기 실패: %v", err)
+			}
+			schemaPath := filepath.Join(dir, "schema.json")
+			schema := `{"base":"t.docx","keys":[{"key":"k1","part":"word/document.xml",` +
+				`"path":"document/body[1]/p[2]/r[1]/t[1]"}]}`
+			if err := os.WriteFile(schemaPath, []byte(schema), 0o644); err != nil {
+				t.Fatalf("스키마 쓰기 실패: %v", err)
+			}
+			dataPath := filepath.Join(dir, "data.json")
+			if err := os.WriteFile(dataPath, []byte(c.data), 0o644); err != nil {
+				t.Fatalf("데이터 쓰기 실패: %v", err)
+			}
+			outPath := filepath.Join(dir, "out.docx")
+
+			var code int
+			stdout := captureStdout(t, func() {
+				code = cmdTmplFill([]string{tplPath, "--schema", schemaPath, "-d", dataPath, "-o", outPath})
+			})
+			if code != c.wantCode {
+				t.Fatalf("exit=%d (기대 %d), stdout=%s", code, c.wantCode, stdout)
+			}
+			if c.wantCode == exitInput && !strings.Contains(stdout, "missing_key") {
+				t.Fatalf("stdout 에 missing_key 가 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+			}
+			_, err := os.Stat(outPath)
+			if c.wantOut && err != nil {
+				t.Fatalf("채워졌어야 하는데 출력 파일이 없다: %v, stdout=%s", err, stdout)
+			}
+			if !c.wantOut && !os.IsNotExist(err) {
+				t.Fatalf("거절된 데이터가 출력 파일을 만들었다: %v", err)
+			}
+		})
 	}
 }
 
@@ -881,5 +1139,39 @@ func TestT5DiffAndTmplAgreeOnAlignment(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestApplyRejectsSetTextWithXMLField 는 설계 §1 증상 3 의 회귀 시험이다.
+//
+// 측정된 사실: {"op":"setText","path":…,"xml":…} 가 ok:true 를 내면서 대상
+// 텍스트를 지웠다. PR #3 의 DisallowUnknownFields 는 모르는 키만 막고, xml 은
+// Op 가 아는 키라 그대로 통과했다.
+func TestApplyRejectsSetTextWithXMLField(t *testing.T) {
+	dir := t.TempDir()
+	inPath := filepath.Join(dir, "in.docx")
+	src := testutil.MinimalDocx([]string{"지켜져야 할 텍스트"})
+	if err := os.WriteFile(inPath, src, 0o644); err != nil {
+		t.Fatalf("입력 파일 쓰기 실패: %v", err)
+	}
+	patchPath := filepath.Join(dir, "patch.json")
+	bad := `{"ops":[{"op":"setText","path":"document/body[1]/p[1]/r[1]/t[1]","xml":"<w:t>바뀜</w:t>"}]}`
+	if err := os.WriteFile(patchPath, []byte(bad), 0o644); err != nil {
+		t.Fatalf("패치 파일 쓰기 실패: %v", err)
+	}
+	outPath := filepath.Join(dir, "out.docx")
+
+	var code int
+	stdout := captureStdout(t, func() {
+		code = cmdApply([]string{inPath, "-p", patchPath, "-o", outPath})
+	})
+	if code != exitInput {
+		t.Fatalf("setText 에 xml 을 준 패치인데 exit=%d (기대 %d), stdout=%s", code, exitInput, stdout)
+	}
+	if !strings.Contains(stdout, "unused_field") {
+		t.Fatalf("stdout 에 unused_field 가 없다(다른 사유로 거절됐을 수 있다): %s", stdout)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("거절된 패치가 출력 파일을 만들었다: %v", err)
 	}
 }

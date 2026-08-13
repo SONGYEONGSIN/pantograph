@@ -441,7 +441,7 @@ func TestD3LocalityOfPatchedDocument(t *testing.T) {
 	}
 	const target = "sld/cSld[1]/spTree[1]/sp[1]/txBody[1]/p[1]/r[1]/t[1]"
 	errs, err := patch.Apply(patched, patch.Patch{Ops: []patch.Op{{
-		Op: "setText", Part: "pptx/slide[2]", Path: target, Text: "바뀐 제목",
+		Op: "setText", Part: "pptx/slide[2]", Path: target, Text: patch.Str("바뀐 제목"),
 	}}})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
