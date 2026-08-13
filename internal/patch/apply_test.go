@@ -1193,11 +1193,13 @@ func swallowFixture(tail string) []byte {
 // 그건 이 입력에 대한 처방이 아니다 (§3 의 순서 논증 — `</w:p>` 가
 // unbalanced_xml 을 받는 것과 같은 이유).
 func TestReplaceRawWithIncompleteFragmentRejected(t *testing.T) {
-	for _, c := range []struct{ name, tail, xml string }{
-		{"미완결 주석 — 문서가 --> 를 준다", `-->`, `<w:p/><!--`},
-		{"미완결 CDATA — 문서가 ]]> 를 준다", `<![CDATA[꼬리]]>`, `<w:p/><![CDATA[`},
-		{"미완결 시작 태그 — 종결자 없음", ``, `<w:p/><w:r`},
-		{"요소도 없이 끊긴 조각", `-->`, `<!--`},
+	for _, c := range []struct{ name, tail, xml, wantInDetail string }{
+		{"미완결 주석 — 문서가 --> 를 준다", `-->`, `<w:p/><!--`, "EOF"},
+		{"미완결 CDATA — 문서가 ]]> 를 준다", `<![CDATA[꼬리]]>`, `<w:p/><![CDATA[`, "CDATA"},
+		{"미완결 시작 태그 — 종결자 없음", ``, `<w:p/><w:r`, "EOF"},
+		{"요소도 없이 끊긴 조각", `-->`, `<!--`, "EOF"},
+		{"끊긴 엔티티 — 문서가 ; 를 준다", `;꼬리`, `<w:p/>&amp`, "EOF"},
+		{"조각 안에서 풀 수 없는 엔티티", ``, `<w:p><w:r><w:t>&nbsp;</w:t></w:r></w:p>`, "&nbsp;"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			src := swallowFixture(c.tail)
@@ -1218,6 +1220,12 @@ func TestReplaceRawWithIncompleteFragmentRejected(t *testing.T) {
 			// 조각이 지켜야 할 조건을 말한다.
 			if !strings.Contains(errs[0].Detail, "조각 안에서") {
 				t.Fatalf("안내가 규칙을 설명하지 않는다: %q", errs[0].Detail)
+			}
+			// 규칙만으로는 어디서 걸렸는지 알 수 없다. 디코더가 멈춘 지점을
+			// 함께 실어야 한다 — 특히 잘리지 않은 입력(풀 수 없는 엔티티)에는
+			// 규칙 문구만 주면 도구가 입력을 잘못 설명하는 셈이 된다.
+			if !strings.Contains(errs[0].Detail, c.wantInDetail) {
+				t.Fatalf("안내가 걸린 지점(%q)을 말하지 않는다: %q", c.wantInDetail, errs[0].Detail)
 			}
 
 			// 문서는 손대지 않아야 한다 — 원자성.
